@@ -19,8 +19,6 @@
     --line: #2C2933;
   }
 
-  
-
   * { box-sizing: border-box; }
 
   body {
@@ -131,6 +129,13 @@
     white-space: nowrap;
   }
 
+  #resync-btn {
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--line);
+  }
+  #resync-btn:hover { border-color: var(--amber); }
+
   .stage {
     background: #000;
     border-radius: 12px;
@@ -237,10 +242,11 @@
 <div class="layout">
   <div class="main">
     <div class="url-bar">
-      <input type="text" id="video-url" placeholder="Google Drive share link ya video URL yahan paste karo">
+      <input type="text" id="video-url" placeholder="YouTube link, Google Drive link, ya video URL yahan paste karo">
       <button id="load-btn">Load Video</button>
+      <button id="resync-btn" title="Sabko apni current position pe sync karo">🔄 Sync</button>
     </div>
-    <div class="hint">Tip: Drive file ko "Anyone with the link" share karo. Bahut badi files (100MB+) Drive ke virus-scan warning ki wajah se load nahi ho sakti — us case mein koi doosri direct video link try karo.</div>
+    <div class="hint">Tip: YouTube link sabse reliable hai (perfect auto-sync). Drive file ko "Anyone with the link" share karo — bahut badi files (100MB+) load nahi ho sakti. Agar kabhi sync bigad jaaye, "🔄 Sync" button dabao — sab tumhari current position pe aa jaayenge.</div>
 
     <div class="stage" id="stage">
       <div class="empty-stage" id="empty-stage">
@@ -248,6 +254,11 @@
         Upar link paste karke "Load Video" dabao
       </div>
       <video id="player" controls style="display:none;"></video>
+      <iframe id="preview-player" style="display:none; width:100%; height:100%; border:0;" allow="autoplay"></iframe>
+      <div id="yt-player" style="display:none; width:100%; height:100%;"></div>
+    </div>
+    <div class="hint" id="fallback-note" style="display:none; color:var(--amber);">
+      Ye video Drive ke direct player se load nahi ho paayi, isliye Google ka apna player dikhaya ja raha hai. Isme play/pause auto-sync nahi hoga — "🔄 Sync" button use karke manually sync karo.
     </div>
   </div>
 
@@ -264,17 +275,28 @@
   </div>
 </div>
 
+<script src="https://www.youtube.com/iframe_api"></script>
 <script>
   const ROOM = "{{ code }}";
   const NAME = "{{ name }}";
   const socket = io();
 
   const video = document.getElementById('player');
+  const previewFrame = document.getElementById('preview-player');
+  const ytContainer = document.getElementById('yt-player');
   const emptyStage = document.getElementById('empty-stage');
+  const fallbackNote = document.getElementById('fallback-note');
   const messagesEl = document.getElementById('messages');
   const userCountEl = document.getElementById('user-count');
 
   let suppressEmit = false; // true while we're applying a remote event, so we don't echo it back
+  let currentPreviewUrl = null;
+  let activeType = null; // 'youtube' | 'drive' | 'direct'
+  let ytPlayer = null;
+  let ytReady = false;
+  let pendingYtVideo = null; // {id, time, playing} if load() is called before API is ready
+  let ytPollTimer = null;
+  let ytLastKnownTime = 0;
 
   socket.on('connect', () => {
     socket.emit('join', { room: ROOM, name: NAME });
@@ -296,64 +318,210 @@
     socket.emit('set_video', { room: ROOM, url: url });
   });
 
-  function showVideo(src) {
-    if (!src) return;
+  function hideAllPlayers() {
     emptyStage.style.display = 'none';
+    fallbackNote.style.display = 'none';
+    video.style.display = 'none';
+    previewFrame.style.display = 'none';
+    ytContainer.style.display = 'none';
+    if (ytPollTimer) { clearInterval(ytPollTimer); ytPollTimer = null; }
+  }
+
+  function showDirectVideo(src) {
+    hideAllPlayers();
+    activeType = 'direct';
     video.style.display = 'block';
     video.src = src;
   }
 
+  function showFallbackPreview(previewUrl) {
+    hideAllPlayers();
+    activeType = 'drive-fallback';
+    fallbackNote.style.display = 'block';
+    previewFrame.style.display = 'block';
+    previewFrame.src = previewUrl;
+  }
+
+  function showYouTube(videoId, startTime, autoplay) {
+    hideAllPlayers();
+    activeType = 'youtube';
+    ytContainer.style.display = 'block';
+
+    if (!ytReady) {
+      pendingYtVideo = { id: videoId, time: startTime || 0, playing: !!autoplay };
+      return;
+    }
+
+    if (ytPlayer) {
+      ytPlayer.loadVideoById({ videoId: videoId, startSeconds: startTime || 0 });
+      if (!autoplay) setTimeout(() => ytPlayer.pauseVideo(), 500);
+      startYtPolling();
+      return;
+    }
+
+    ytPlayer = new YT.Player('yt-player', {
+      videoId: videoId,
+      playerVars: { autoplay: autoplay ? 1 : 0, start: Math.floor(startTime || 0) },
+      events: {
+        onReady: () => { startYtPolling(); },
+        onStateChange: onYtStateChange,
+      }
+    });
+  }
+
+  // Called by the YouTube IFrame API script once it has loaded.
+  window.onYouTubeIframeAPIReady = function() {
+    ytReady = true;
+    if (pendingYtVideo) {
+      const v = pendingYtVideo;
+      pendingYtVideo = null;
+      showYouTube(v.id, v.time, v.playing);
+    }
+  };
+
+  function onYtStateChange(e) {
+    if (suppressEmit) return;
+    if (e.data === YT.PlayerState.PLAYING) {
+      socket.emit('play', { room: ROOM, time: ytPlayer.getCurrentTime() });
+    } else if (e.data === YT.PlayerState.PAUSED) {
+      socket.emit('pause', { room: ROOM, time: ytPlayer.getCurrentTime() });
+    }
+  }
+
+  // YouTube's API doesn't emit a dedicated "seek" event, so we poll and
+  // detect large jumps in playback position ourselves.
+  function startYtPolling() {
+    if (ytPollTimer) clearInterval(ytPollTimer);
+    ytLastKnownTime = ytPlayer.getCurrentTime();
+    ytPollTimer = setInterval(() => {
+      if (!ytPlayer || suppressEmit) return;
+      const t = ytPlayer.getCurrentTime();
+      const expected = ytLastKnownTime + 1;
+      if (Math.abs(t - expected) > 1.5) {
+        socket.emit('seek', { room: ROOM, time: t });
+      }
+      ytLastKnownTime = t;
+    }, 1000);
+  }
+
+  // If the direct <video> fails to load (common with larger/blocked Drive
+  // files), automatically fall back to Google's own embedded player.
+  video.addEventListener('error', () => {
+    if (currentPreviewUrl) {
+      showFallbackPreview(currentPreviewUrl);
+    }
+  });
+
+  function loadVideo(videoInfo, startTime, playing) {
+    if (!videoInfo) return;
+    currentPreviewUrl = videoInfo.preview_url || null;
+
+    if (videoInfo.type === 'youtube') {
+      showYouTube(videoInfo.video_id, startTime, playing);
+    } else if (videoInfo.type === 'drive') {
+      if (videoInfo.video_url) {
+        showDirectVideo(videoInfo.video_url);
+      } else if (videoInfo.preview_url) {
+        showFallbackPreview(videoInfo.preview_url);
+      }
+    } else {
+      showDirectVideo(videoInfo.video_url);
+    }
+  }
+
   socket.on('video_set', (data) => {
-    showVideo(data.video_url);
+    loadVideo(data.video, 0, false);
   });
 
   // ---- Initial sync when joining ----
   socket.on('sync_state', (data) => {
-    if (data.video_url) {
-      showVideo(data.video_url);
-      suppressEmit = true;
+    if (!data.video) return;
+    suppressEmit = true;
+    loadVideo(data.video, data.time || 0, data.state === 'playing');
+    if (data.video.type === 'direct' || data.video.type === 'drive') {
       video.currentTime = data.time || 0;
-      if (data.state === 'playing') {
-        video.play().catch(() => {});
-      }
-      setTimeout(() => suppressEmit = false, 400);
+      if (data.state === 'playing') video.play().catch(() => {});
     }
+    setTimeout(() => suppressEmit = false, 800);
   });
 
   // ---- Remote playback events ----
   socket.on('play', (data) => {
     suppressEmit = true;
-    if (Math.abs(video.currentTime - data.time) > 0.6) video.currentTime = data.time;
-    video.play().catch(() => {});
-    setTimeout(() => suppressEmit = false, 400);
+    if (activeType === 'youtube' && ytPlayer) {
+      if (Math.abs(ytPlayer.getCurrentTime() - data.time) > 1) ytPlayer.seekTo(data.time, true);
+      ytPlayer.playVideo();
+    } else if (activeType === 'direct') {
+      if (Math.abs(video.currentTime - data.time) > 0.6) video.currentTime = data.time;
+      video.play().catch(() => {});
+    }
+    setTimeout(() => suppressEmit = false, 500);
   });
 
   socket.on('pause', (data) => {
     suppressEmit = true;
-    video.currentTime = data.time;
-    video.pause();
-    setTimeout(() => suppressEmit = false, 400);
+    if (activeType === 'youtube' && ytPlayer) {
+      ytPlayer.seekTo(data.time, true);
+      ytPlayer.pauseVideo();
+    } else if (activeType === 'direct') {
+      video.currentTime = data.time;
+      video.pause();
+    }
+    setTimeout(() => suppressEmit = false, 500);
   });
 
   socket.on('seek', (data) => {
     suppressEmit = true;
-    video.currentTime = data.time;
-    setTimeout(() => suppressEmit = false, 400);
+    if (activeType === 'youtube' && ytPlayer) {
+      ytPlayer.seekTo(data.time, true);
+      ytLastKnownTime = data.time;
+    } else if (activeType === 'direct') {
+      video.currentTime = data.time;
+    }
+    setTimeout(() => suppressEmit = false, 500);
   });
 
-  // ---- Local playback -> emit to room ----
+  socket.on('resync', (data) => {
+    suppressEmit = true;
+    if (activeType === 'youtube' && ytPlayer) {
+      ytPlayer.seekTo(data.time, true);
+      if (data.playing) ytPlayer.playVideo(); else ytPlayer.pauseVideo();
+      ytLastKnownTime = data.time;
+    } else if (activeType === 'direct') {
+      video.currentTime = data.time;
+      if (data.playing) video.play().catch(() => {}); else video.pause();
+    }
+    setTimeout(() => suppressEmit = false, 500);
+  });
+
+  // ---- Manual resync button ----
+  document.getElementById('resync-btn').addEventListener('click', () => {
+    let t = 0, playing = false;
+    if (activeType === 'youtube' && ytPlayer) {
+      t = ytPlayer.getCurrentTime();
+      playing = ytPlayer.getPlayerState() === YT.PlayerState.PLAYING;
+    } else if (activeType === 'direct') {
+      t = video.currentTime;
+      playing = !video.paused;
+    } else {
+      return; // nothing to sync in drive-fallback mode
+    }
+    socket.emit('resync', { room: ROOM, time: t, playing: playing });
+  });
+
+  // ---- Local <video> playback -> emit to room ----
   video.addEventListener('play', () => {
-    if (suppressEmit) return;
+    if (suppressEmit || activeType !== 'direct') return;
     socket.emit('play', { room: ROOM, time: video.currentTime });
   });
 
   video.addEventListener('pause', () => {
-    if (suppressEmit) return;
+    if (suppressEmit || activeType !== 'direct') return;
     socket.emit('pause', { room: ROOM, time: video.currentTime });
   });
 
   video.addEventListener('seeked', () => {
-    if (suppressEmit) return;
+    if (suppressEmit || activeType !== 'direct') return;
     socket.emit('seek', { room: ROOM, time: video.currentTime });
   });
 
