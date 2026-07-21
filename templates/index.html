@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="hi">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SaathScreen — Watch Together</title>
+<title>Watch Party</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <style>
@@ -190,8 +190,8 @@
   <div class="wrap">
     <div class="brand">
       <div class="projector">🎬</div>
-      <h1>Saath<span>Screen</span></h1>
-      <p>ek link paste karo, saath mein dekho — chahe kitni bhi door ho</p>
+      <h1>Watch <span>Party</span></h1>
+      <p>Paste a link, watch together — no matter the distance</p>
     </div>
 
     <div class="card">
@@ -200,32 +200,32 @@
       {% endif %}
 
       <div class="tabs">
-        <div class="tab active" data-panel="create">Room Banao</div>
-        <div class="tab" data-panel="join">Room Join Karo</div>
+        <div class="tab active" data-panel="create">Create Room</div>
+        <div class="tab" data-panel="join">Join Room</div>
       </div>
 
       <div class="panel active" id="panel-create">
         <form action="/create" method="POST">
-          <label>Tumhara naam</label>
-          <input type="text" name="name" placeholder="e.g. Rohan" required>
-          <button class="go" type="submit">Naya Room Banao →</button>
+          <label>Your name</label>
+          <input type="text" name="name" placeholder="e.g. Alex" required>
+          <button class="go" type="submit">Create Room →</button>
         </form>
       </div>
 
       <div class="panel" id="panel-join">
         <form action="/join" method="POST">
-          <label>Tumhara naam</label>
-          <input type="text" name="name" placeholder="e.g. Priya" required>
+          <label>Your name</label>
+          <input type="text" name="name" placeholder="e.g. Jordan" required>
           <label>Room code</label>
           <input class="code-input" type="text" name="code" maxlength="6" placeholder="ABC123" required>
-          <button class="go" type="submit">Room Join Karo →</button>
+          <button class="go" type="submit">Join Room →</button>
         </form>
       </div>
     </div>
 
     <div class="foot">
-      Room banane ke baad code apne dost ko WhatsApp pe bhej do.<br>
-      Video ke liye YouTube link (best), ya Google Drive share link use karo.
+      Share the room code with your friend on WhatsApp after creating a room.<br>
+      Use a YouTube link (best) or a Google Drive share link for video.
     </div>
   </div>
 

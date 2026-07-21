@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="hi">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Room {{ code }} — SaathScreen</title>
+<title>Room {{ code }} — Watch Party</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
@@ -13,6 +13,7 @@
     --surface: #19171F;
     --surface-2: #221F29;
     --amber: #E8A33D;
+    --green: #6FCF97;
     --violet: #7A6B9E;
     --text: #F2EFE9;
     --muted: #9A94A6;
@@ -21,12 +22,16 @@
 
   * { box-sizing: border-box; }
 
-  body {
+  html, body {
+    height: 100%;
     margin: 0;
+    overflow: hidden;
+  }
+
+  body {
     background: var(--bg);
     color: var(--text);
     font-family: 'Inter', sans-serif;
-    min-height: 100vh;
   }
 
   header {
@@ -87,11 +92,32 @@
     display: grid;
     grid-template-columns: 1fr 320px;
     gap: 0;
-    height: calc(100vh - 57px);
+    height: calc(100vh - 65px);
+    height: calc(100dvh - 65px);
+    overflow: hidden;
   }
 
   @media (max-width: 860px) {
-    .layout { grid-template-columns: 1fr; height: auto; }
+    .layout {
+      display: flex;
+      flex-direction: column;
+      grid-template-columns: none;
+      height: calc(100vh - 57px);
+      height: calc(100dvh - 57px);
+      overflow: hidden;
+    }
+    .main {
+      flex: 0 0 auto;
+      max-height: none;
+      overflow: visible;
+      padding: 12px;
+      gap: 8px;
+    }
+    .hint {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
   }
 
   .main {
@@ -100,6 +126,7 @@
     flex-direction: column;
     gap: 14px;
     overflow-y: auto;
+    min-height: 0;
   }
 
   .url-bar {
@@ -169,6 +196,17 @@
     display: flex;
     flex-direction: column;
     height: 100%;
+    min-height: 0;
+  }
+
+  @media (max-width: 860px) {
+    .chat {
+      border-left: none;
+      border-top: 1px solid var(--line);
+      flex: 1 1 auto;
+      min-height: 0;
+      height: auto;
+    }
   }
 
   .chat-head {
@@ -195,7 +233,7 @@
   }
 
   .msg { font-size: 13.5px; line-height: 1.4; }
-  .msg .name { color: var(--amber); font-weight: 600; }
+  .msg .name { font-weight: 600; }
   .msg.system { color: var(--muted); font-style: italic; font-size: 12px; }
 
   .chat-input {
@@ -229,7 +267,7 @@
 <body>
 
 <header>
-  <div class="logo">Saath<span>Screen</span></div>
+  <div class="logo">Watch <span>Party</span></div>
   <div class="ticket">
     <div>
       <div class="label">Room Code</div>
@@ -242,23 +280,23 @@
 <div class="layout">
   <div class="main">
     <div class="url-bar">
-      <input type="text" id="video-url" placeholder="YouTube link, Google Drive link, ya video URL yahan paste karo">
+      <input type="text" id="video-url" placeholder="Paste a YouTube link, Google Drive link, or video URL">
       <button id="load-btn">Load Video</button>
-      <button id="resync-btn" title="Sabko apni current position pe sync karo">🔄 Sync</button>
+      <button id="resync-btn" title="Sync everyone to your current position">🔄 Sync</button>
     </div>
-    <div class="hint">Tip: YouTube link sabse reliable hai (perfect auto-sync). Drive file ko "Anyone with the link" share karo — bahut badi files (100MB+) load nahi ho sakti. Agar kabhi sync bigad jaaye, "🔄 Sync" button dabao — sab tumhari current position pe aa jaayenge.</div>
+    <div class="hint">Tip: YouTube links work best (perfect auto-sync). For Google Drive, share the file as "Anyone with the link" — files over 100MB may not load. If playback ever falls out of sync, press "🔄 Sync" to bring everyone to your current position.</div>
 
     <div class="stage" id="stage">
       <div class="empty-stage" id="empty-stage">
         <div class="reel">🎞️</div>
-        Upar link paste karke "Load Video" dabao
+        Paste a link above and press "Load Video"
       </div>
       <video id="player" controls style="display:none;"></video>
       <iframe id="preview-player" style="display:none; width:100%; height:100%; border:0;" allow="autoplay"></iframe>
       <div id="yt-player" style="display:none; width:100%; height:100%;"></div>
     </div>
     <div class="hint" id="fallback-note" style="display:none; color:var(--amber);">
-      Ye video Drive ke direct player se load nahi ho paayi, isliye Google ka apna player dikhaya ja raha hai. Isme play/pause auto-sync nahi hoga — "🔄 Sync" button use karke manually sync karo.
+      This video couldn't load directly, so Google's own player is shown instead. Auto-sync isn't available in this mode — use the "🔄 Sync" button to keep everyone aligned manually.
     </div>
   </div>
 
@@ -269,7 +307,7 @@
     </div>
     <div class="messages" id="messages"></div>
     <div class="chat-input">
-      <input type="text" id="chat-text" placeholder="Message likho...">
+      <input type="text" id="chat-text" placeholder="Type a message...">
       <button id="send-btn">Send</button>
     </div>
   </div>
@@ -526,6 +564,16 @@
   });
 
   // ---- Chat ----
+  const userColors = new Map();
+  const colorPalette = ['#E8A33D', '#6FCF97', '#7A9EE8', '#E87A9E', '#B98CE0'];
+
+  function colorFor(name) {
+    if (!userColors.has(name)) {
+      userColors.set(name, colorPalette[userColors.size % colorPalette.length]);
+    }
+    return userColors.get(name);
+  }
+
   function addMessage(name, msg, system=false) {
     const div = document.createElement('div');
     if (system) {
@@ -533,7 +581,13 @@
       div.textContent = msg;
     } else {
       div.className = 'msg';
-      div.innerHTML = `<span class="name">${name}:</span> ${msg}`;
+      const color = colorFor(name);
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'name';
+      nameSpan.style.color = color;
+      nameSpan.textContent = name + ':';
+      div.appendChild(nameSpan);
+      div.appendChild(document.createTextNode(' ' + msg));
     }
     messagesEl.appendChild(div);
     messagesEl.scrollTop = messagesEl.scrollHeight;
