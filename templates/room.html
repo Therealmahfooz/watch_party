@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Room {{ code }} — SaathScreen</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+<style>
+  :root {
+    --bg: #0F0E13;
+    --surface: #19171F;
+    --surface-2: #221F29;
+    --amber: #E8A33D;
+    --violet: #7A6B9E;
+    --text: #F2EFE9;
+    --muted: #9A94A6;
+    --line: #2C2933;
+  }
+
+  
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    min-height: 100vh;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 22px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface);
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .logo {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 22px;
+    letter-spacing: 1.5px;
+  }
+  .logo span { color: var(--amber); }
+
+  .ticket {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--surface-2);
+    border: 1px dashed var(--amber);
+    border-radius: 8px;
+    padding: 6px 14px;
+  }
+
+  .ticket .label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--muted);
+  }
+
+  .ticket .code {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    font-size: 18px;
+    letter-spacing: 3px;
+    color: var(--amber);
+  }
+
+  .ticket button {
+    background: none;
+    border: 1px solid var(--line);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .ticket button:hover { border-color: var(--amber); }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 0;
+    height: calc(100vh - 57px);
+  }
+
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; height: auto; }
+  }
+
+  .main {
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    overflow-y: auto;
+  }
+
+  .url-bar {
+    display: flex;
+    gap: 8px;
+  }
+
+  .url-bar input {
+    flex: 1;
+    padding: 10px 12px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 13px;
+  }
+
+  .url-bar button {
+    padding: 10px 16px;
+    background: var(--amber);
+    border: none;
+    border-radius: 8px;
+    color: #1a1509;
+    font-weight: 700;
+    cursor: pointer;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+
+  .stage {
+    background: #000;
+    border-radius: 12px;
+    aspect-ratio: 16/9;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    position: relative;
+  }
+
+  .stage video { width: 100%; height: 100%; }
+
+  .empty-stage {
+    text-align: center;
+    color: var(--muted);
+    padding: 24px;
+  }
+  .empty-stage .reel { font-size: 40px; margin-bottom: 8px; }
+
+  .hint {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+
+  .chat {
+    background: var(--surface);
+    border-left: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+
+  .chat-head {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--line);
+    font-weight: 700;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .chat-head .count { color: var(--amber); }
+
+  .messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .msg { font-size: 13.5px; line-height: 1.4; }
+  .msg .name { color: var(--amber); font-weight: 600; }
+  .msg.system { color: var(--muted); font-style: italic; font-size: 12px; }
+
+  .chat-input {
+    display: flex;
+    border-top: 1px solid var(--line);
+    padding: 10px;
+    gap: 8px;
+  }
+
+  .chat-input input {
+    flex: 1;
+    padding: 10px 12px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 13px;
+  }
+
+  .chat-input button {
+    background: var(--violet);
+    border: none;
+    border-radius: 8px;
+    color: var(--text);
+    padding: 0 16px;
+    cursor: pointer;
+    font-weight: 600;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Saath<span>Screen</span></div>
+  <div class="ticket">
+    <div>
+      <div class="label">Room Code</div>
+      <div class="code" id="room-code">{{ code }}</div>
+    </div>
+    <button id="copy-btn">Copy</button>
+  </div>
+</header>
+
+<div class="layout">
+  <div class="main">
+    <div class="url-bar">
+      <input type="text" id="video-url" placeholder="Google Drive share link ya video URL yahan paste karo">
+      <button id="load-btn">Load Video</button>
+    </div>
+    <div class="hint">Tip: Drive file ko "Anyone with the link" share karo. Bahut badi files (100MB+) Drive ke virus-scan warning ki wajah se load nahi ho sakti — us case mein koi doosri direct video link try karo.</div>
+
+    <div class="stage" id="stage">
+      <div class="empty-stage" id="empty-stage">
+        <div class="reel">🎞️</div>
+        Upar link paste karke "Load Video" dabao
+      </div>
+      <video id="player" controls style="display:none;"></video>
+    </div>
+  </div>
+
+  <div class="chat">
+    <div class="chat-head">
+      <span>Live Chat</span>
+      <span class="count" id="user-count">1 online</span>
+    </div>
+    <div class="messages" id="messages"></div>
+    <div class="chat-input">
+      <input type="text" id="chat-text" placeholder="Message likho...">
+      <button id="send-btn">Send</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const ROOM = "{{ code }}";
+  const NAME = "{{ name }}";
+  const socket = io();
+
+  const video = document.getElementById('player');
+  const emptyStage = document.getElementById('empty-stage');
+  const messagesEl = document.getElementById('messages');
+  const userCountEl = document.getElementById('user-count');
+
+  let suppressEmit = false; // true while we're applying a remote event, so we don't echo it back
+
+  socket.on('connect', () => {
+    socket.emit('join', { room: ROOM, name: NAME });
+  });
+
+  // ---- Room code copy ----
+  document.getElementById('copy-btn').addEventListener('click', () => {
+    navigator.clipboard.writeText(ROOM);
+    const btn = document.getElementById('copy-btn');
+    const old = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = old, 1200);
+  });
+
+  // ---- Load video ----
+  document.getElementById('load-btn').addEventListener('click', () => {
+    const url = document.getElementById('video-url').value.trim();
+    if (!url) return;
+    socket.emit('set_video', { room: ROOM, url: url });
+  });
+
+  function showVideo(src) {
+    if (!src) return;
+    emptyStage.style.display = 'none';
+    video.style.display = 'block';
+    video.src = src;
+  }
+
+  socket.on('video_set', (data) => {
+    showVideo(data.video_url);
+  });
+
+  // ---- Initial sync when joining ----
+  socket.on('sync_state', (data) => {
+    if (data.video_url) {
+      showVideo(data.video_url);
+      suppressEmit = true;
+      video.currentTime = data.time || 0;
+      if (data.state === 'playing') {
+        video.play().catch(() => {});
+      }
+      setTimeout(() => suppressEmit = false, 400);
+    }
+  });
+
+  // ---- Remote playback events ----
+  socket.on('play', (data) => {
+    suppressEmit = true;
+    if (Math.abs(video.currentTime - data.time) > 0.6) video.currentTime = data.time;
+    video.play().catch(() => {});
+    setTimeout(() => suppressEmit = false, 400);
+  });
+
+  socket.on('pause', (data) => {
+    suppressEmit = true;
+    video.currentTime = data.time;
+    video.pause();
+    setTimeout(() => suppressEmit = false, 400);
+  });
+
+  socket.on('seek', (data) => {
+    suppressEmit = true;
+    video.currentTime = data.time;
+    setTimeout(() => suppressEmit = false, 400);
+  });
+
+  // ---- Local playback -> emit to room ----
+  video.addEventListener('play', () => {
+    if (suppressEmit) return;
+    socket.emit('play', { room: ROOM, time: video.currentTime });
+  });
+
+  video.addEventListener('pause', () => {
+    if (suppressEmit) return;
+    socket.emit('pause', { room: ROOM, time: video.currentTime });
+  });
+
+  video.addEventListener('seeked', () => {
+    if (suppressEmit) return;
+    socket.emit('seek', { room: ROOM, time: video.currentTime });
+  });
+
+  // ---- Chat ----
+  function addMessage(name, msg, system=false) {
+    const div = document.createElement('div');
+    if (system) {
+      div.className = 'msg system';
+      div.textContent = msg;
+    } else {
+      div.className = 'msg';
+      div.innerHTML = `<span class="name">${name}:</span> ${msg}`;
+    }
+    messagesEl.appendChild(div);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function sendChat() {
+    const input = document.getElementById('chat-text');
+    const msg = input.value.trim();
+    if (!msg) return;
+    socket.emit('chat', { room: ROOM, name: NAME, msg: msg });
+    input.value = '';
+  }
+
+  document.getElementById('send-btn').addEventListener('click', sendChat);
+  document.getElementById('chat-text').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') sendChat();
+  });
+
+  socket.on('chat', (data) => addMessage(data.name, data.msg));
+  socket.on('system_message', (data) => addMessage(null, data.text, true));
+  socket.on('user_list', (data) => {
+    userCountEl.textContent = `${data.users.length} online`;
+  });
+</script>
+
+</body>
+</html>
