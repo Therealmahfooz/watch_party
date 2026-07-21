@@ -14,7 +14,7 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 # In-memory room storage.
 # rooms = {
 #   "ABC123": {
-#       "video_url": "https://...",
+#       "video": { "type": "youtube"|"drive"|"direct", ... } | None,
 #       "state": "paused" | "playing",
 #       "time": 0.0,          # last known playback position (seconds)
 #       "updated_at": ts,     # time.time() when state/time last changed
@@ -32,28 +32,39 @@ def make_room_code(length=6):
             return code
 
 
-def drive_share_link_to_direct(url: str) -> str:
+def parse_video_source(url: str):
     """
-    Convert a Google Drive share link into a direct-playable video URL.
-    Handles formats like:
-      https://drive.google.com/file/d/FILE_ID/view?usp=sharing
-      https://drive.google.com/open?id=FILE_ID
-      https://drive.google.com/uc?id=FILE_ID
-    Falls back to returning the original URL untouched if it isn't a
-    recognizable Drive link (so plain direct video URLs still work).
+    Figure out what kind of video link was pasted and return a dict the
+    frontend can use to decide which player to show:
+      { "type": "youtube", "video_id": "..." }
+      { "type": "drive", "video_url": "...", "preview_url": "..." }
+      { "type": "direct", "video_url": "..." }
     """
     if not url:
-        return url
+        return {"type": "direct", "video_url": ""}
 
-    match = re.search(r"/file/d/([a-zA-Z0-9_-]+)", url)
-    if not match:
-        match = re.search(r"[?&]id=([a-zA-Z0-9_-]+)", url)
+    # --- YouTube ---
+    yt_match = re.search(
+        r"(?:youtu\.be/|youtube\.com/(?:watch\?v=|embed/|shorts/))([a-zA-Z0-9_-]{11})",
+        url,
+    )
+    if yt_match:
+        return {"type": "youtube", "video_id": yt_match.group(1)}
 
-    if match:
-        file_id = match.group(1)
-        return f"https://drive.google.com/uc?export=download&id={file_id}"
+    # --- Google Drive ---
+    drive_match = re.search(r"/file/d/([a-zA-Z0-9_-]+)", url)
+    if not drive_match:
+        drive_match = re.search(r"drive\.google\.com.*[?&]id=([a-zA-Z0-9_-]+)", url)
+    if drive_match:
+        file_id = drive_match.group(1)
+        return {
+            "type": "drive",
+            "video_url": f"https://drive.google.com/uc?export=download&id={file_id}&confirm=t",
+            "preview_url": f"https://drive.google.com/file/d/{file_id}/preview",
+        }
 
-    return url
+    # --- Anything else: treat as a plain direct video URL ---
+    return {"type": "direct", "video_url": url}
 
 
 def current_playback_time(room):
@@ -78,7 +89,7 @@ def create_room():
     name = request.form.get("name", "").strip() or "Guest"
     code = make_room_code()
     rooms[code] = {
-        "video_url": "",
+        "video": None,
         "state": "paused",
         "time": 0.0,
         "updated_at": time.time(),
@@ -119,7 +130,7 @@ def on_join(data):
 
     # Send the newcomer the current state of the room so they sync up.
     emit("sync_state", {
-        "video_url": rooms[room_code]["video_url"],
+        "video": rooms[room_code]["video"],
         "state": rooms[room_code]["state"],
         "time": current_playback_time(room_code),
     })
@@ -135,13 +146,13 @@ def on_set_video(data):
     if room_code not in rooms:
         return
 
-    direct_url = drive_share_link_to_direct(url)
-    rooms[room_code]["video_url"] = direct_url
+    video = parse_video_source(url)
+    rooms[room_code]["video"] = video
     rooms[room_code]["state"] = "paused"
     rooms[room_code]["time"] = 0.0
     rooms[room_code]["updated_at"] = time.time()
 
-    emit("video_set", {"video_url": direct_url}, room=room_code)
+    emit("video_set", {"video": video}, room=room_code)
 
 
 @socketio.on("play")
@@ -177,6 +188,22 @@ def on_seek(data):
     rooms[room_code]["time"] = t
     rooms[room_code]["updated_at"] = time.time()
     emit("seek", {"time": t}, room=room_code, include_self=False)
+
+
+@socketio.on("resync")
+def on_resync(data):
+    """Manual 'sync everyone to my playback position' — most reliable way
+    to keep YouTube in sync since play/pause/seek detection via the
+    YouTube API is less precise than a plain <video> element."""
+    room_code = data.get("room", "").upper()
+    t = data.get("time", 0.0)
+    playing = data.get("playing", False)
+    if room_code not in rooms:
+        return
+    rooms[room_code]["time"] = t
+    rooms[room_code]["state"] = "playing" if playing else "paused"
+    rooms[room_code]["updated_at"] = time.time()
+    emit("resync", {"time": t, "playing": playing}, room=room_code, include_self=False)
 
 
 @socketio.on("chat")
