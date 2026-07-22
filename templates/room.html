@@ -9,15 +9,15 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
 <style>
   :root {
-    --bg: #000000;
-    --surface: #0A0A0A;
-    --surface-2: #151515;
+    --bg: #0F0E13;
+    --surface: #19171F;
+    --surface-2: #221F29;
     --amber: #E8A33D;
     --green: #6FCF97;
     --violet: #7A6B9E;
     --text: #F2EFE9;
-    --muted: #8A8A8A;
-    --line: #232323;
+    --muted: #9A94A6;
+    --line: #2C2933;
   }
 
   * { box-sizing: border-box; }
@@ -87,46 +87,6 @@
     cursor: pointer;
   }
   .ticket button:hover { border-color: var(--amber); }
-
-  .header-right {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  #toggle-controls-btn {
-    background: var(--surface-2);
-    border: 1px solid var(--line);
-    color: var(--text);
-    border-radius: 8px;
-    padding: 8px 10px;
-    cursor: pointer;
-    font-size: 15px;
-    line-height: 1;
-  }
-  #toggle-controls-btn:hover { border-color: var(--amber); }
-
-  #exit-btn {
-    background: transparent;
-    border: 1px solid #6b2a2a;
-    color: #e88;
-    border-radius: 8px;
-    padding: 8px 14px;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 600;
-  }
-  #exit-btn:hover { background: rgba(220,80,80,0.12); }
-
-  .controls-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-  }
-
-  .main.collapsed .controls-panel {
-    display: none;
-  }
 
   .layout {
     display: grid;
@@ -215,12 +175,7 @@
     position: relative;
   }
 
-  .stage video {
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-    background: #000;
-  }
+  .stage video { width: 100%; height: 100%; }
 
   .empty-stage {
     text-align: center;
@@ -313,29 +268,23 @@
 
 <header>
   <div class="logo">Watch <span>Party</span></div>
-  <div class="header-right">
-    <div class="ticket">
-      <div>
-        <div class="label">Room Code</div>
-        <div class="code" id="room-code">{{ code }}</div>
-      </div>
-      <button id="copy-btn">Copy</button>
+  <div class="ticket">
+    <div>
+      <div class="label">Room Code</div>
+      <div class="code" id="room-code">{{ code }}</div>
     </div>
-    <button id="toggle-controls-btn" title="Change video">⚙</button>
-    <button id="exit-btn" title="Leave room">Exit</button>
+    <button id="copy-btn">Copy</button>
   </div>
 </header>
 
 <div class="layout">
-  <div class="main" id="main-panel">
-    <div class="controls-panel" id="controls-panel">
-      <div class="url-bar">
-        <input type="text" id="video-url" placeholder="Paste a YouTube link, Google Drive link, or video URL">
-        <button id="load-btn">Load Video</button>
-        <button id="resync-btn" title="Sync everyone to your current position">🔄 Sync</button>
-      </div>
-      <div class="hint">Tip: YouTube links work best (perfect auto-sync). For Google Drive, share the file as "Anyone with the link" — files over 100MB may not load. If playback ever falls out of sync, press "🔄 Sync" to bring everyone to your current position.</div>
+  <div class="main">
+    <div class="url-bar">
+      <input type="text" id="video-url" placeholder="Paste a YouTube link, Google Drive link, or video URL">
+      <button id="load-btn">Load Video</button>
+      <button id="resync-btn" title="Sync everyone to your current position">🔄 Sync</button>
     </div>
+    <div class="hint">Tip: YouTube links work best (perfect auto-sync). For Google Drive, share the file as "Anyone with the link" — files over 100MB may not load. If playback ever falls out of sync, press "🔄 Sync" to bring everyone to your current position.</div>
 
     <div class="stage" id="stage">
       <div class="empty-stage" id="empty-stage">
@@ -377,7 +326,6 @@
   const fallbackNote = document.getElementById('fallback-note');
   const messagesEl = document.getElementById('messages');
   const userCountEl = document.getElementById('user-count');
-  const mainPanel = document.getElementById('main-panel');
 
   let suppressEmit = false; // true while we're applying a remote event, so we don't echo it back
   let currentPreviewUrl = null;
@@ -387,44 +335,9 @@
   let pendingYtVideo = null; // {id, time, playing} if load() is called before API is ready
   let ytPollTimer = null;
   let ytLastKnownTime = 0;
-  let intentionalDisconnect = false; // true while we deliberately drop the connection (tab hidden)
 
   socket.on('connect', () => {
     socket.emit('join', { room: ROOM, name: NAME });
-  });
-
-  // ---- Cinema mode: hide the URL bar/hint once a video is loaded ----
-  document.getElementById('toggle-controls-btn').addEventListener('click', () => {
-    mainPanel.classList.toggle('collapsed');
-  });
-
-  function enterCinemaMode() {
-    mainPanel.classList.add('collapsed');
-  }
-
-  // ---- Exit room ----
-  document.getElementById('exit-btn').addEventListener('click', () => {
-    if (confirm('Leave this room?')) {
-      intentionalDisconnect = true;
-      socket.disconnect();
-      window.location.href = '/';
-    }
-  });
-
-  // ---- Accurate online status: treat backgrounding the tab/app as
-  // leaving, so the online count and room membership stay accurate. ----
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) {
-      intentionalDisconnect = true;
-      socket.disconnect();
-    } else if (!socket.connected) {
-      intentionalDisconnect = false;
-      socket.connect();
-    }
-  });
-
-  socket.io.on('reconnect', () => {
-    intentionalDisconnect = false;
   });
 
   // ---- Room code copy ----
@@ -552,8 +465,6 @@
     } else {
       showDirectVideo(videoInfo.video_url);
     }
-
-    enterCinemaMode();
   }
 
   socket.on('video_set', (data) => {
