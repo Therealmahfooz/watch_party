@@ -229,6 +229,11 @@
     position: relative;
   }
 
+  .stage.drive-fallback {
+    aspect-ratio: auto;
+    height: min(60vh, 420px);
+  }
+
   .stage video {
     width: 100%;
     height: 100%;
@@ -429,15 +434,15 @@
     }
   });
 
-  // ---- Accurate online status without false triggers ----
-  // A brief app-switch (screenshot, notification, glance at another tab)
-  // should NOT drop you from the room. Only being away for a sustained
-  // stretch (30s+) marks you offline, avoiding rapid join/leave spam.
+  // ---- Accurate online status ----
+  // A very brief flicker (OS taking a screenshot, a system dialog for a
+  // fraction of a second) shouldn't count — but switching apps, locking
+  // the phone, or going to another tab should show up almost immediately.
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       awayTimer = setTimeout(() => {
         socket.disconnect();
-      }, 30000);
+      }, 1000);
     } else {
       if (awayTimer) { clearTimeout(awayTimer); awayTimer = null; }
       if (!socket.connected) socket.connect();
@@ -466,6 +471,7 @@
     video.style.display = 'none';
     previewFrame.style.display = 'none';
     ytContainer.style.display = 'none';
+    document.getElementById('stage').classList.remove('drive-fallback');
     if (ytPollTimer) { clearInterval(ytPollTimer); ytPollTimer = null; }
   }
 
@@ -479,6 +485,7 @@
   function showFallbackPreview(previewUrl) {
     hideAllPlayers();
     activeType = 'drive-fallback';
+    document.getElementById('stage').classList.add('drive-fallback');
     fallbackNote.style.display = 'block';
     previewFrame.style.display = 'block';
     previewFrame.src = previewUrl;
