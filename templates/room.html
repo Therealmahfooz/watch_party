@@ -237,7 +237,7 @@
   .stage video {
     width: 100%;
     height: 100%;
-    object-fit: contain;
+    object-fit: cover;
     background: #000;
   }
 
@@ -286,7 +286,36 @@
     flex-shrink: 0;
   }
 
-  .chat-head .count { color: var(--accent); }
+  .chat-head .count { color: var(--accent); cursor: pointer; user-select: none; }
+
+  .online-wrap {
+    position: relative;
+  }
+
+  .online-dropdown {
+    display: none;
+    position: absolute;
+    top: 22px;
+    right: 0;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 0;
+    min-width: 150px;
+    z-index: 20;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  }
+
+  .online-dropdown.open { display: block; }
+
+  .online-dropdown .entry {
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: normal;
+    white-space: nowrap;
+  }
 
   .msg { font-size: 13.5px; line-height: 1.4; }
   .msg .name { font-weight: 600; }
@@ -376,7 +405,10 @@
   <div class="chat">
     <div class="chat-head">
       <span>Live Chat</span>
-      <span class="count" id="user-count">1 online</span>
+      <div class="online-wrap">
+        <span class="count" id="user-count">1 online</span>
+        <div class="online-dropdown" id="online-dropdown"></div>
+      </div>
     </div>
     <div class="messages" id="messages"></div>
     <div class="chat-input">
@@ -589,11 +621,25 @@
     if (!data.video) return;
     suppressEmit = true;
     loadVideo(data.video, data.time || 0, data.state === 'playing');
+
     if (data.video.type === 'direct' || data.video.type === 'drive') {
-      video.currentTime = data.time || 0;
-      if (data.state === 'playing') video.play().catch(() => {});
+      const targetTime = data.time || 0;
+      const shouldPlay = data.state === 'playing';
+      const applySeek = () => {
+        video.currentTime = targetTime;
+        if (shouldPlay) video.play().catch(() => {});
+      };
+      if (video.readyState >= 1) {
+        // Metadata already available (duration/seekable known) — safe to seek now.
+        applySeek();
+      } else {
+        // Video hasn't finished loading yet — wait until it's ready to seek,
+        // otherwise the browser silently ignores the currentTime assignment
+        // and new joiners always start from 0:00 instead of the live position.
+        video.addEventListener('loadedmetadata', applySeek, { once: true });
+      }
     }
-    setTimeout(() => suppressEmit = false, 800);
+    setTimeout(() => suppressEmit = false, 1200);
   });
 
   // ---- Remote playback events ----
@@ -721,8 +767,27 @@
 
   socket.on('chat', (data) => addMessage(data.name, data.msg));
   socket.on('system_message', (data) => addMessage(null, data.text, true));
+  const onlineDropdown = document.getElementById('online-dropdown');
+
   socket.on('user_list', (data) => {
     userCountEl.textContent = `${data.users.length} online`;
+    onlineDropdown.innerHTML = '';
+    data.users.forEach(name => {
+      const entry = document.createElement('div');
+      entry.className = 'entry';
+      entry.textContent = name;
+      entry.style.color = colorFor(name);
+      onlineDropdown.appendChild(entry);
+    });
+  });
+
+  userCountEl.addEventListener('click', (e) => {
+    e.stopPropagation();
+    onlineDropdown.classList.toggle('open');
+  });
+
+  document.addEventListener('click', () => {
+    onlineDropdown.classList.remove('open');
   });
 </script>
 
