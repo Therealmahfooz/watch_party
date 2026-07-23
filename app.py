@@ -211,9 +211,16 @@ def on_chat(data):
     room_code = data.get("room", "").upper()
     name = data.get("name", "Guest")
     msg = data.get("msg", "").strip()
+    reply_to = data.get("reply_to")  # optional: {"name": "...", "text": "..."}
     if not msg or room_code not in rooms:
         return
-    emit("chat", {"name": name, "msg": msg}, room=room_code)
+    payload = {"name": name, "msg": msg}
+    if isinstance(reply_to, dict) and reply_to.get("text"):
+        payload["reply_to"] = {
+            "name": str(reply_to.get("name", ""))[:40],
+            "text": str(reply_to.get("text", ""))[:200],
+        }
+    emit("chat", payload, room=room_code)
 
 
 @socketio.on("disconnect")
