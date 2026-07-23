@@ -441,8 +441,6 @@
   let pendingYtVideo = null; // {id, time, playing} if load() is called before API is ready
   let ytPollTimer = null;
   let ytLastKnownTime = 0;
-  let awayTimer = null; // grace period before we treat backgrounding as "left"
-
   socket.on('connect', () => {
     socket.emit('join', { room: ROOM, name: NAME });
   });
@@ -472,13 +470,25 @@
   // the phone, or going to another tab should show up almost immediately.
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
-      awayTimer = setTimeout(() => {
-        socket.disconnect();
-      }, 1000);
+      // No delay here on purpose: mobile browsers freeze JS execution
+      // almost the instant the app is backgrounded, so a setTimeout
+      // scheduled here would never actually run on a phone. Disconnect
+      // synchronously, right as the event fires.
+      socket.disconnect();
     } else {
-      if (awayTimer) { clearTimeout(awayTimer); awayTimer = null; }
       if (!socket.connected) socket.connect();
     }
+  });
+
+  // Extra safety net: some mobile browsers fire 'pagehide' instead of (or
+  // in addition to) 'visibilitychange' when the app is backgrounded/closed.
+  window.addEventListener('pagehide', () => {
+    socket.disconnect();
+  });
+
+  // Also cover the tab/app being closed or navigated away from entirely.
+  window.addEventListener('pagehide', () => {
+    socket.disconnect();
   });
 
   // ---- Room code copy ----
