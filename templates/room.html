@@ -27,6 +27,9 @@
     height: var(--app-height, 100%);
     margin: 0;
     overflow: hidden;
+    position: fixed;
+    inset: 0;
+    width: 100%;
   }
 
   body {
@@ -1013,7 +1016,6 @@
   // default mousedown/touch behavior keeps focus on the input the whole
   // time, so the keyboard never dismisses.
   sendBtn.addEventListener('mousedown', (e) => e.preventDefault());
-  sendBtn.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
   sendBtn.addEventListener('click', sendChat);
   chatTextInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') sendChat();
