@@ -30,6 +30,7 @@
     position: fixed;
     inset: 0;
     width: 100%;
+    transition: height 0.2s ease;
   }
 
   body {
@@ -533,15 +534,25 @@
 </div>
 
 <script>
-  // Lock the page height to the viewport size as it is *before* any
-  // on-screen keyboard opens. Mobile browsers shrink window.innerHeight
-  // when the keyboard appears, which otherwise reflows this whole layout
-  // and makes the video jump. We only re-measure on real orientation
-  // changes, not on the keyboard opening/closing.
+  // The video sits in a fixed-size box at the top (.main is flex: 0 0 auto),
+  // and the chat panel below it absorbs all remaining space (.chat is
+  // flex: 1). So instead of locking the page height, we track the actual
+  // *visible* viewport height (window.visualViewport, which correctly
+  // shrinks when the on-screen keyboard opens) and apply that to the page.
+  // The video's box size never depends on this value, so it stays put —
+  // only the chat panel shrinks, which naturally pushes the message input
+  // up to sit right above the keyboard instead of hiding underneath it.
   function setAppHeight() {
-    document.documentElement.style.setProperty('--app-height', window.innerHeight + 'px');
+    const h = (window.visualViewport ? window.visualViewport.height : window.innerHeight);
+    document.documentElement.style.setProperty('--app-height', h + 'px');
   }
   setAppHeight();
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', setAppHeight);
+    window.visualViewport.addEventListener('scroll', setAppHeight);
+  } else {
+    window.addEventListener('resize', setAppHeight);
+  }
   window.addEventListener('orientationchange', () => setTimeout(setAppHeight, 200));
 </script>
 <script src="https://www.youtube.com/iframe_api"></script>
