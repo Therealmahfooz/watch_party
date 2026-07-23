@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=overlays-content">
 <title>Room {{ code }} — Watch Together</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
@@ -24,6 +24,7 @@
 
   html, body {
     height: 100%;
+    height: var(--app-height, 100%);
     margin: 0;
     overflow: hidden;
   }
@@ -304,9 +305,16 @@
     min-width: 150px;
     z-index: 20;
     box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    opacity: 0;
+    transform: translateY(-4px);
+    transition: opacity 0.15s ease, transform 0.15s ease;
   }
 
-  .online-dropdown.open { display: block; }
+  .online-dropdown.open {
+    display: block;
+    opacity: 1;
+    transform: translateY(0);
+  }
 
   .online-dropdown .entry {
     padding: 6px 14px;
@@ -320,6 +328,12 @@
   .msg-row {
     position: relative;
     touch-action: pan-y;
+    animation: msgIn 0.2s ease;
+  }
+
+  @keyframes msgIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
   }
 
   .msg-row .reply-hint-icon {
@@ -382,6 +396,12 @@
     background: var(--surface-2);
     border-top: 1px solid var(--line);
     flex-shrink: 0;
+    animation: replyIn 0.15s ease;
+  }
+
+  @keyframes replyIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
   }
 
   .reply-preview-content {
@@ -509,6 +529,18 @@
   </div>
 </div>
 
+<script>
+  // Lock the page height to the viewport size as it is *before* any
+  // on-screen keyboard opens. Mobile browsers shrink window.innerHeight
+  // when the keyboard appears, which otherwise reflows this whole layout
+  // and makes the video jump. We only re-measure on real orientation
+  // changes, not on the keyboard opening/closing.
+  function setAppHeight() {
+    document.documentElement.style.setProperty('--app-height', window.innerHeight + 'px');
+  }
+  setAppHeight();
+  window.addEventListener('orientationchange', () => setTimeout(setAppHeight, 200));
+</script>
 <script src="https://www.youtube.com/iframe_api"></script>
 <script>
   const ROOM = "{{ code }}";
@@ -972,9 +1004,17 @@
     socket.emit('chat', payload);
     input.value = '';
     clearReplyTarget();
+    input.focus(); // keep the keyboard open for the next message
   }
 
-  document.getElementById('send-btn').addEventListener('click', sendChat);
+  const sendBtn = document.getElementById('send-btn');
+  // Tapping the Send button would normally blur the text input first
+  // (closing the keyboard) before the click handler runs. Preventing the
+  // default mousedown/touch behavior keeps focus on the input the whole
+  // time, so the keyboard never dismisses.
+  sendBtn.addEventListener('mousedown', (e) => e.preventDefault());
+  sendBtn.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+  sendBtn.addEventListener('click', sendChat);
   chatTextInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') sendChat();
   });
