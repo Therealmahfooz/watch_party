@@ -317,19 +317,103 @@
     white-space: nowrap;
   }
 
+  .msg-row {
+    position: relative;
+    touch-action: pan-y;
+  }
+
+  .msg-row .reply-hint-icon {
+    position: absolute;
+    left: -28px;
+    top: 50%;
+    transform: translateY(-50%);
+    opacity: 0;
+    transition: opacity 0.15s;
+    font-size: 15px;
+  }
+
+  .msg-row.swiping .reply-hint-icon { opacity: 1; }
+
+  .msg-row .msg-bubble {
+    transition: transform 0.15s ease;
+  }
+
   .msg { font-size: 13.5px; line-height: 1.4; }
   .msg .name { font-weight: 600; }
   .msg.system { color: var(--muted); font-style: italic; font-size: 12px; }
+
+  .msg .quoted {
+    border-left: 3px solid var(--accent);
+    background: rgba(255,255,255,0.04);
+    border-radius: 6px;
+    padding: 4px 8px;
+    margin-bottom: 4px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .msg .quoted .quoted-name {
+    font-weight: 600;
+    color: var(--accent);
+  }
+  .msg .quoted .quoted-text {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: block;
+    max-width: 100%;
+  }
 
   .messages {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 14px 16px;
+    padding: 14px 16px 14px 34px;
     display: flex;
     flex-direction: column;
     gap: 10px;
   }
+
+  .reply-preview {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 12px;
+    background: var(--surface-2);
+    border-top: 1px solid var(--line);
+    flex-shrink: 0;
+  }
+
+  .reply-preview-content {
+    border-left: 3px solid var(--accent);
+    padding-left: 8px;
+    overflow: hidden;
+  }
+
+  .reply-preview-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent);
+  }
+
+  .reply-preview-text {
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  #reply-cancel-btn {
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-size: 16px;
+    cursor: pointer;
+    flex-shrink: 0;
+    padding: 4px 8px;
+  }
+  #reply-cancel-btn:hover { color: var(--text); }
 
   .chat-input {
     display: flex;
@@ -411,6 +495,13 @@
       </div>
     </div>
     <div class="messages" id="messages"></div>
+    <div class="reply-preview" id="reply-preview" style="display:none;">
+      <div class="reply-preview-content">
+        <div class="reply-preview-name" id="reply-preview-name"></div>
+        <div class="reply-preview-text" id="reply-preview-text"></div>
+      </div>
+      <button id="reply-cancel-btn" title="Cancel reply">✕</button>
+    </div>
     <div class="chat-input">
       <input type="text" id="chat-text" placeholder="Type a message...">
       <button id="send-btn">Send</button>
@@ -743,39 +834,152 @@
     return userColors.get(name);
   }
 
-  function addMessage(name, msg, system=false) {
-    const div = document.createElement('div');
-    if (system) {
-      div.className = 'msg system';
-      div.textContent = msg;
-    } else {
-      div.className = 'msg';
-      const color = colorFor(name);
-      const nameSpan = document.createElement('span');
-      nameSpan.className = 'name';
-      nameSpan.style.color = color;
-      nameSpan.textContent = name + ':';
-      div.appendChild(nameSpan);
-      div.appendChild(document.createTextNode(' ' + msg));
+  let replyTarget = null; // { name, text } currently being replied to
+  const replyPreview = document.getElementById('reply-preview');
+  const replyPreviewName = document.getElementById('reply-preview-name');
+  const replyPreviewText = document.getElementById('reply-preview-text');
+  const chatTextInput = document.getElementById('chat-text');
+
+  function setReplyTarget(name, text) {
+    replyTarget = { name, text };
+    replyPreviewName.textContent = name;
+    replyPreviewText.textContent = text;
+    replyPreview.style.display = 'flex';
+    chatTextInput.focus();
+  }
+
+  function clearReplyTarget() {
+    replyTarget = null;
+    replyPreview.style.display = 'none';
+  }
+
+  document.getElementById('reply-cancel-btn').addEventListener('click', clearReplyTarget);
+
+  // Enables a WhatsApp-style swipe gesture on a message bubble: dragging it
+  // sideways past a small threshold sets that message as the reply target.
+  function enableSwipeToReply(rowEl, name, text) {
+    let startX = 0, startY = 0, dx = 0, dragging = false, decided = false, isHorizontal = false;
+    const bubble = rowEl.querySelector('.msg-bubble');
+    const THRESHOLD = 60;
+
+    function onStart(x, y) {
+      startX = x; startY = y; dx = 0; dragging = true; decided = false; isHorizontal = false;
     }
-    messagesEl.appendChild(div);
+    function onMove(x, y) {
+      if (!dragging) return;
+      const diffX = x - startX;
+      const diffY = y - startY;
+      if (!decided) {
+        if (Math.abs(diffX) > 6 || Math.abs(diffY) > 6) {
+          isHorizontal = Math.abs(diffX) > Math.abs(diffY);
+          decided = true;
+        } else {
+          return;
+        }
+      }
+      if (!isHorizontal) return; // let vertical scrolling happen normally
+      dx = Math.max(-90, Math.min(90, diffX));
+      bubble.style.transform = `translateX(${dx}px)`;
+      rowEl.classList.toggle('swiping', Math.abs(dx) > 15);
+    }
+    function onEnd() {
+      if (!dragging) return;
+      dragging = false;
+      bubble.style.transform = '';
+      rowEl.classList.remove('swiping');
+      if (isHorizontal && Math.abs(dx) > THRESHOLD) {
+        setReplyTarget(name, text);
+      }
+      dx = 0;
+    }
+
+    rowEl.addEventListener('touchstart', (e) => {
+      const t = e.touches[0];
+      onStart(t.clientX, t.clientY);
+    }, { passive: true });
+    rowEl.addEventListener('touchmove', (e) => {
+      const t = e.touches[0];
+      onMove(t.clientX, t.clientY);
+    }, { passive: true });
+    rowEl.addEventListener('touchend', onEnd);
+    rowEl.addEventListener('touchcancel', onEnd);
+
+    // Mouse drag support for desktop testing.
+    rowEl.addEventListener('mousedown', (e) => onStart(e.clientX, e.clientY));
+    window.addEventListener('mousemove', (e) => onMove(e.clientX, e.clientY));
+    window.addEventListener('mouseup', onEnd);
+  }
+
+  function addMessage(name, msg, system = false, replyTo = null) {
+    const row = document.createElement('div');
+    row.className = 'msg-row';
+
+    const hintIcon = document.createElement('span');
+    hintIcon.className = 'reply-hint-icon';
+    hintIcon.textContent = '↩';
+    row.appendChild(hintIcon);
+
+    const div = document.createElement('div');
+    div.className = 'msg-bubble';
+
+    if (system) {
+      div.className += ' msg system';
+      div.textContent = msg;
+      row.appendChild(div);
+      messagesEl.appendChild(row);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return;
+    }
+
+    div.className += ' msg';
+
+    if (replyTo && replyTo.text) {
+      const quoted = document.createElement('div');
+      quoted.className = 'quoted';
+      const qName = document.createElement('span');
+      qName.className = 'quoted-name';
+      qName.textContent = replyTo.name || '';
+      const qText = document.createElement('span');
+      qText.className = 'quoted-text';
+      qText.textContent = replyTo.text;
+      quoted.appendChild(qName);
+      quoted.appendChild(document.createElement('br'));
+      quoted.appendChild(qText);
+      div.appendChild(quoted);
+    }
+
+    const color = colorFor(name);
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'name';
+    nameSpan.style.color = color;
+    nameSpan.textContent = name + ':';
+    div.appendChild(nameSpan);
+    div.appendChild(document.createTextNode(' ' + msg));
+
+    row.appendChild(div);
+    messagesEl.appendChild(row);
     messagesEl.scrollTop = messagesEl.scrollHeight;
+
+    enableSwipeToReply(row, name, msg);
   }
 
   function sendChat() {
-    const input = document.getElementById('chat-text');
+    const input = chatTextInput;
     const msg = input.value.trim();
     if (!msg) return;
-    socket.emit('chat', { room: ROOM, name: NAME, msg: msg });
+    const payload = { room: ROOM, name: NAME, msg: msg };
+    if (replyTarget) payload.reply_to = replyTarget;
+    socket.emit('chat', payload);
     input.value = '';
+    clearReplyTarget();
   }
 
   document.getElementById('send-btn').addEventListener('click', sendChat);
-  document.getElementById('chat-text').addEventListener('keydown', (e) => {
+  chatTextInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') sendChat();
   });
 
-  socket.on('chat', (data) => addMessage(data.name, data.msg));
+  socket.on('chat', (data) => addMessage(data.name, data.msg, false, data.reply_to || null));
   socket.on('system_message', (data) => addMessage(null, data.text, true));
   const onlineDropdown = document.getElementById('online-dropdown');
 
