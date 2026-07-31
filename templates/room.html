@@ -215,12 +215,12 @@
     white-space: nowrap;
   }
 
-  #resync-btn {
+  #resync-btn, #local-file-btn {
     background: var(--surface-2);
     color: var(--text);
     border: 1px solid var(--line);
   }
-  #resync-btn:hover { border-color: var(--accent); }
+  #resync-btn:hover, #local-file-btn:hover { border-color: var(--accent); }
 
   .stage {
     background: #000;
@@ -234,10 +234,6 @@
     position: relative;
   }
 
-  .stage.drive-fallback {
-    aspect-ratio: auto;
-    height: min(60vh, 420px);
-  }
 
   .stage video {
     width: 100%;
@@ -489,11 +485,17 @@
   <div class="main" id="main-panel">
     <div class="controls-panel" id="controls-panel">
       <div class="url-bar">
+        <input type="text" id="yt-search-input" placeholder="Search YouTube for a movie or video...">
+        <button id="yt-search-btn">🔍 Search on YouTube</button>
+      </div>
+      <div class="url-bar">
         <input type="text" id="video-url" placeholder="Paste a YouTube link, Google Drive link, or video URL">
         <button id="load-btn">Load Video</button>
+        <button id="local-file-btn" title="Play a video already saved on this device">📁 Local File</button>
         <button id="resync-btn" title="Sync everyone to your current position">🔄 Sync</button>
+        <input type="file" id="local-file-input" accept="video/*" style="display:none;">
       </div>
-      <div class="hint">Tip: YouTube links work best (perfect auto-sync). For Google Drive, share the file as "Anyone with the link" — files over 100MB may not load. If playback ever falls out of sync, press "🔄 Sync" to bring everyone to your current position.</div>
+      <div class="hint">Tip: YouTube links work best (perfect auto-sync). For Google Drive, share the file as "Anyone with the link" — files over 100MB may not load. "Local File" plays a video already saved on your device — everyone needs the same file on their own phone for it to stay in sync. If playback ever falls out of sync, press "🔄 Sync" to bring everyone to your current position.</div>
     </div>
 
     <div class="stage" id="stage">
@@ -502,11 +504,10 @@
         Paste a link above and press "Load Video"
       </div>
       <video id="player" controls style="display:none;"></video>
-      <iframe id="preview-player" style="display:none; width:100%; height:100%; border:0;" allow="autoplay"></iframe>
       <div id="yt-player" style="display:none; width:100%; height:100%;"></div>
     </div>
     <div class="hint" id="fallback-note" style="display:none; color:var(--accent);">
-      This video couldn't load directly, so Google's own player is shown instead. Auto-sync isn't available in this mode — use the "🔄 Sync" button to keep everyone aligned manually.
+      This Google Drive video couldn't be loaded directly — Drive is blocking or restricting this file. Try a YouTube link instead (most reliable), or use "📁 Local File" if everyone has the same video saved on their device.
     </div>
   </div>
 
@@ -562,7 +563,6 @@
   const socket = io();
 
   const video = document.getElementById('player');
-  const previewFrame = document.getElementById('preview-player');
   const ytContainer = document.getElementById('yt-player');
   const emptyStage = document.getElementById('empty-stage');
   const fallbackNote = document.getElementById('fallback-note');
@@ -571,7 +571,6 @@
   const mainPanel = document.getElementById('main-panel');
 
   let suppressEmit = false; // true while we're applying a remote event, so we don't echo it back
-  let currentPreviewUrl = null;
   let activeType = null; // 'youtube' | 'drive' | 'direct'
   let ytPlayer = null;
   let ytReady = false;
@@ -644,11 +643,28 @@
     socket.emit('set_video', { room: ROOM, url: url });
   });
 
+  // ---- Local file playback ----
+  // A file picked here only exists on this device — there's no way to send
+  // gigabytes of video to the other person over the network. Play/pause/seek
+  // still sync normally through the socket, so this works great as long as
+  // everyone loads the *same* file from their own device.
+  document.getElementById('local-file-btn').addEventListener('click', () => {
+    document.getElementById('local-file-input').click();
+  });
+
+  document.getElementById('local-file-input').addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const objectUrl = URL.createObjectURL(file);
+    showDirectVideo(objectUrl);
+    enterCinemaMode();
+    addMessage(null, `${NAME} loaded a local file — everyone needs the same video saved on their own device to stay in sync.`, true);
+  });
+
   function hideAllPlayers() {
     emptyStage.style.display = 'none';
     fallbackNote.style.display = 'none';
     video.style.display = 'none';
-    previewFrame.style.display = 'none';
     ytContainer.style.display = 'none';
     document.getElementById('stage').classList.remove('drive-fallback');
     if (ytPollTimer) { clearInterval(ytPollTimer); ytPollTimer = null; }
@@ -661,13 +677,13 @@
     video.src = src;
   }
 
-  function showFallbackPreview(previewUrl) {
+  function showDriveError() {
     hideAllPlayers();
-    activeType = 'drive-fallback';
-    document.getElementById('stage').classList.add('drive-fallback');
+    activeType = null;
+    emptyStage.style.display = 'block';
+    emptyStage.querySelector('.reel').textContent = '⚠️';
+    emptyStage.lastChild.textContent = "This Drive video couldn't be loaded.";
     fallbackNote.style.display = 'block';
-    previewFrame.style.display = 'block';
-    previewFrame.src = previewUrl;
   }
 
   function showYouTube(videoId, startTime, autoplay) {
@@ -732,25 +748,24 @@
     }, 1000);
   }
 
-  // If the direct <video> fails to load (common with larger/blocked Drive
-  // files), automatically fall back to Google's own embedded player.
+  // If the direct <video> fails to load (common with restricted/large
+  // Drive files), show a plain error instead of any third-party player.
   video.addEventListener('error', () => {
-    if (currentPreviewUrl) {
-      showFallbackPreview(currentPreviewUrl);
+    if (activeType === 'direct') {
+      showDriveError();
     }
   });
 
   function loadVideo(videoInfo, startTime, playing) {
     if (!videoInfo) return;
-    currentPreviewUrl = videoInfo.preview_url || null;
 
     if (videoInfo.type === 'youtube') {
       showYouTube(videoInfo.video_id, startTime, playing);
     } else if (videoInfo.type === 'drive') {
       if (videoInfo.video_url) {
         showDirectVideo(videoInfo.video_url);
-      } else if (videoInfo.preview_url) {
-        showFallbackPreview(videoInfo.preview_url);
+      } else {
+        showDriveError();
       }
     } else {
       showDirectVideo(videoInfo.video_url);
@@ -848,7 +863,7 @@
       t = video.currentTime;
       playing = !video.paused;
     } else {
-      return; // nothing to sync in drive-fallback mode
+      return; // no active player to sync
     }
     socket.emit('resync', { room: ROOM, time: t, playing: playing });
   });
