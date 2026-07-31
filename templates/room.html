@@ -234,6 +234,27 @@
     position: relative;
   }
 
+  #play-overlay-btn {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.55);
+    border: 2px solid rgba(255,255,255,0.6);
+    color: #fff;
+    font-size: 22px;
+    cursor: pointer;
+    z-index: 10;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    transition: opacity 0.2s, background 0.2s;
+  }
+  #play-overlay-btn:hover { background: rgba(0,0,0,0.75); }
+  #play-overlay-btn.hidden-fade { opacity: 0; pointer-events: none; }
 
   .stage video {
     width: 100%;
@@ -503,8 +524,9 @@
         <div class="reel">🎞️</div>
         Paste a link above and press "Load Video"
       </div>
-      <video id="player" controls style="display:none;"></video>
+      <video id="player" style="display:none;" playsinline></video>
       <div id="yt-player" style="display:none; width:100%; height:100%;"></div>
+      <button id="play-overlay-btn" style="display:none;" title="Play/Pause">▶</button>
     </div>
     <div class="hint" id="fallback-note" style="display:none; color:var(--accent);">
       This Google Drive video couldn't be loaded directly — Drive is blocking or restricting this file. Try a YouTube link instead (most reliable), or use "📁 Local File" if everyone has the same video saved on their device.
@@ -643,6 +665,17 @@
     socket.emit('set_video', { room: ROOM, url: url });
   });
 
+  // ---- YouTube search shortcut ----
+  function openYoutubeSearch() {
+    const q = document.getElementById('yt-search-input').value.trim();
+    if (!q) return;
+    window.open('https://www.youtube.com/results?search_query=' + encodeURIComponent(q), '_blank');
+  }
+  document.getElementById('yt-search-btn').addEventListener('click', openYoutubeSearch);
+  document.getElementById('yt-search-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') openYoutubeSearch();
+  });
+
   // ---- Local file playback ----
   // A file picked here only exists on this device — there's no way to send
   // gigabytes of video to the other person over the network. Play/pause/seek
@@ -661,11 +694,18 @@
     addMessage(null, `${NAME} loaded a local file — everyone needs the same video saved on their own device to stay in sync.`, true);
   });
 
+  const overlayBtn = document.getElementById('play-overlay-btn');
+
+  function updateOverlayIcon(isPlaying) {
+    overlayBtn.textContent = isPlaying ? '⏸' : '▶';
+  }
+
   function hideAllPlayers() {
     emptyStage.style.display = 'none';
     fallbackNote.style.display = 'none';
     video.style.display = 'none';
     ytContainer.style.display = 'none';
+    overlayBtn.style.display = 'none';
     document.getElementById('stage').classList.remove('drive-fallback');
     if (ytPollTimer) { clearInterval(ytPollTimer); ytPollTimer = null; }
   }
@@ -675,6 +715,8 @@
     activeType = 'direct';
     video.style.display = 'block';
     video.src = src;
+    overlayBtn.style.display = 'flex';
+    updateOverlayIcon(false);
   }
 
   function showDriveError() {
@@ -690,6 +732,8 @@
     hideAllPlayers();
     activeType = 'youtube';
     ytContainer.style.display = 'block';
+    overlayBtn.style.display = 'flex';
+    updateOverlayIcon(!!autoplay);
 
     if (!ytReady) {
       pendingYtVideo = { id: videoId, time: startTime || 0, playing: !!autoplay };
@@ -705,13 +749,26 @@
 
     ytPlayer = new YT.Player('yt-player', {
       videoId: videoId,
-      playerVars: { autoplay: autoplay ? 1 : 0, start: Math.floor(startTime || 0) },
+      playerVars: { autoplay: autoplay ? 1 : 0, start: Math.floor(startTime || 0), controls: 0 },
       events: {
         onReady: () => { startYtPolling(); },
         onStateChange: onYtStateChange,
       }
     });
   }
+
+  // ---- Custom play/pause overlay ----
+  overlayBtn.addEventListener('click', () => {
+    if (activeType === 'youtube' && ytPlayer) {
+      if (ytPlayer.getPlayerState() === YT.PlayerState.PLAYING) {
+        ytPlayer.pauseVideo();
+      } else {
+        ytPlayer.playVideo();
+      }
+    } else if (activeType === 'direct') {
+      if (video.paused) video.play(); else video.pause();
+    }
+  });
 
   // Called by the YouTube IFrame API script once it has loaded.
   window.onYouTubeIframeAPIReady = function() {
@@ -724,6 +781,8 @@
   };
 
   function onYtStateChange(e) {
+    if (e.data === YT.PlayerState.PLAYING) updateOverlayIcon(true);
+    else if (e.data === YT.PlayerState.PAUSED) updateOverlayIcon(false);
     if (suppressEmit) return;
     if (e.data === YT.PlayerState.PLAYING) {
       socket.emit('play', { room: ROOM, time: ytPlayer.getCurrentTime() });
@@ -870,11 +929,13 @@
 
   // ---- Local <video> playback -> emit to room ----
   video.addEventListener('play', () => {
+    if (activeType === 'direct') updateOverlayIcon(true);
     if (suppressEmit || activeType !== 'direct') return;
     socket.emit('play', { room: ROOM, time: video.currentTime });
   });
 
   video.addEventListener('pause', () => {
+    if (activeType === 'direct') updateOverlayIcon(false);
     if (suppressEmit || activeType !== 'direct') return;
     socket.emit('pause', { room: ROOM, time: video.currentTime });
   });
