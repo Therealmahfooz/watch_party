@@ -575,7 +575,7 @@
         <button id="resync-btn" title="Sync everyone to your current position">🔄 Sync</button>
         <input type="file" id="local-file-input" accept="video/*" style="display:none;">
       </div>
-      <div class="hint">Tip: YouTube links work best (perfect auto-sync). For Google Drive, share the file as "Anyone with the link" — files over 100MB may not load. Public Telegram channel posts (t.me/channel/123) play with Telegram's own controls — no auto-sync, use "🔄 Sync" manually. "Local File" plays a video already saved on your device — everyone needs the same file on their own phone for it to stay in sync.</div>
+      <div class="hint">Tip: YouTube links work best (perfect auto-sync). For Google Drive or OneDrive, share the file as publicly viewable — large files may not load. Public Telegram channel posts (t.me/channel/123) play with Telegram's own controls — no auto-sync, use "🔄 Sync" manually. "Local File" plays a video already saved on your device — everyone needs the same file on their own phone for it to stay in sync.</div>
     </div>
 
     <div class="stage" id="stage">
@@ -886,12 +886,14 @@
     // auto-sync here, same as opening the post directly in Telegram.
   }
 
-  function showDriveError() {
+  let currentCloudProvider = 'Drive';
+
+  function showCloudError() {
     hideAllPlayers();
     activeType = null;
     emptyStage.style.display = 'block';
     emptyStage.querySelector('.reel').textContent = '⚠️';
-    emptyStage.lastChild.textContent = "This Drive video couldn't be loaded.";
+    emptyStage.lastChild.textContent = `This ${currentCloudProvider} video couldn't be loaded.`;
     fallbackNote.style.display = 'block';
   }
 
@@ -976,10 +978,11 @@
   }
 
   // If the direct <video> fails to load (common with restricted/large
-  // Drive files), show a plain error instead of any third-party player.
+  // Drive or OneDrive files), show a plain error instead of any
+  // third-party player.
   video.addEventListener('error', () => {
-    if (activeType === 'direct') {
-      showDriveError();
+    if (activeType === 'direct' && currentCloudProvider) {
+      showCloudError();
     }
   });
 
@@ -987,16 +990,27 @@
     if (!videoInfo) return;
 
     if (videoInfo.type === 'youtube') {
+      currentCloudProvider = null;
       showYouTube(videoInfo.video_id, startTime, playing);
     } else if (videoInfo.type === 'drive') {
+      currentCloudProvider = 'Google Drive';
       if (videoInfo.video_url) {
         showDirectVideo(videoInfo.video_url);
       } else {
-        showDriveError();
+        showCloudError();
+      }
+    } else if (videoInfo.type === 'onedrive') {
+      currentCloudProvider = 'OneDrive';
+      if (videoInfo.video_url) {
+        showDirectVideo(videoInfo.video_url);
+      } else {
+        showCloudError();
       }
     } else if (videoInfo.type === 'telegram') {
+      currentCloudProvider = null;
       showTelegram(videoInfo.embed_url);
     } else {
+      currentCloudProvider = null;
       showDirectVideo(videoInfo.video_url);
     }
 
@@ -1013,7 +1027,7 @@
     suppressEmit = true;
     loadVideo(data.video, data.time || 0, data.state === 'playing');
 
-    if (data.video.type === 'direct' || data.video.type === 'drive') {
+    if (data.video.type === 'direct' || data.video.type === 'drive' || data.video.type === 'onedrive') {
       const targetTime = data.time || 0;
       const shouldPlay = data.state === 'playing';
       const applySeek = () => {
