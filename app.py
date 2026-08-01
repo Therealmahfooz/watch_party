@@ -68,6 +68,16 @@ def parse_video_source(url: str):
             "preview_url": f"https://drive.google.com/file/d/{file_id}/preview",
         }
 
+    # --- Telegram (public channel post) ---
+    # Works only for posts in PUBLIC channels, e.g. https://t.me/channelname/123
+    tg_match = re.search(r"t\.me/(?:s/)?([A-Za-z0-9_]+)/(\d+)", url)
+    if tg_match:
+        channel, post_id = tg_match.group(1), tg_match.group(2)
+        return {
+            "type": "telegram",
+            "embed_url": f"https://t.me/{channel}/{post_id}?embed=1",
+        }
+
     # --- Anything else: treat as a plain direct video URL ---
     return {"type": "direct", "video_url": url}
 
