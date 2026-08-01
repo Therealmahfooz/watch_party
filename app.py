@@ -68,26 +68,6 @@ def parse_video_source(url: str):
             "preview_url": f"https://drive.google.com/file/d/{file_id}/preview",
         }
 
-    # --- Telegram (public channel post) ---
-    # Works only for posts in PUBLIC channels, e.g. https://t.me/channelname/123
-    tg_match = re.search(r"t\.me/(?:s/)?([A-Za-z0-9_]+)/(\d+)", url)
-    if tg_match:
-        channel, post_id = tg_match.group(1), tg_match.group(2)
-        return {
-            "type": "telegram",
-            "embed_url": f"https://t.me/{channel}/{post_id}?embed=1",
-        }
-
-    # --- OneDrive / SharePoint ---
-    # Same idea as the Drive trick: append a download flag to the share
-    # link. Microsoft changes this behavior periodically, so it's treated
-    # as "attempt direct playback, show a clean error if it fails" — same
-    # as Drive, not a guaranteed-working path.
-    if re.search(r"(1drv\.ms|onedrive\.live\.com|[\w-]+\.sharepoint\.com)", url):
-        sep = "&" if "?" in url else "?"
-        direct_url = url if "download=1" in url else f"{url}{sep}download=1"
-        return {"type": "onedrive", "video_url": direct_url}
-
     # --- Anything else: treat as a plain direct video URL ---
     return {"type": "direct", "video_url": url}
 
@@ -285,6 +265,40 @@ def on_chat(data):
     emit("chat", payload, room=room_code)
 
 
+@socketio.on("voice_join")
+def on_voice_join(data):
+    """Announce this user is ready for voice chat, so existing
+    voice-enabled peers in the room can start a WebRTC connection to them."""
+    room_code = data.get("room", "").upper()
+    if room_code not in rooms:
+        return
+    emit("voice_peer_joined", {"sid": request.sid}, room=room_code, include_self=False)
+
+
+@socketio.on("voice_offer")
+def on_voice_offer(data):
+    target = data.get("target")
+    if not target:
+        return
+    emit("voice_offer", {"sdp": data.get("sdp"), "sender": request.sid}, room=target)
+
+
+@socketio.on("voice_answer")
+def on_voice_answer(data):
+    target = data.get("target")
+    if not target:
+        return
+    emit("voice_answer", {"sdp": data.get("sdp"), "sender": request.sid}, room=target)
+
+
+@socketio.on("voice_ice_candidate")
+def on_voice_ice_candidate(data):
+    target = data.get("target")
+    if not target:
+        return
+    emit("voice_ice_candidate", {"candidate": data.get("candidate"), "sender": request.sid}, room=target)
+
+
 @socketio.on("disconnect")
 def on_disconnect():
     for room_code, r in list(rooms.items()):
@@ -292,6 +306,7 @@ def on_disconnect():
             name = r["users"].pop(request.sid)
             emit("system_message", {"text": f"{name} left the room"}, room=room_code)
             emit("user_list", {"users": list(r["users"].values())}, room=room_code)
+            emit("voice_peer_left", {"sid": request.sid}, room=room_code)
 
 
 if __name__ == "__main__":
