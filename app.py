@@ -3,13 +3,18 @@ import re
 import random
 import string
 import time
+import json
+import urllib.request
+import urllib.parse
 
-from flask import Flask, render_template, request, redirect, url_for, session
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 from flask_socketio import SocketIO, join_room, leave_room, emit
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "change-this-to-something-random-in-production"
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+
+YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
 
 # In-memory room storage.
 # rooms = {
@@ -114,6 +119,43 @@ def room(code):
         return redirect(url_for("index"))
     name = request.args.get("name", "Guest")
     return render_template("room.html", code=code, name=name)
+
+
+@app.route("/api/youtube_search", methods=["GET"])
+def youtube_search():
+    query = request.args.get("q", "").strip()
+    if not query or not YOUTUBE_API_KEY:
+        return jsonify({"results": []})
+
+    params = urllib.parse.urlencode({
+        "part": "snippet",
+        "q": query,
+        "type": "video",
+        "maxResults": 6,
+        "key": YOUTUBE_API_KEY,
+    })
+    url = f"https://www.googleapis.com/youtube/v3/search?{params}"
+
+    try:
+        with urllib.request.urlopen(url, timeout=6) as resp:
+            data = json.load(resp)
+    except Exception:
+        return jsonify({"results": []})
+
+    results = []
+    for item in data.get("items", []):
+        video_id = item.get("id", {}).get("videoId")
+        snippet = item.get("snippet", {})
+        if not video_id:
+            continue
+        results.append({
+            "video_id": video_id,
+            "title": snippet.get("title", ""),
+            "channel": snippet.get("channelTitle", ""),
+            "thumbnail": (snippet.get("thumbnails", {}).get("default", {}) or {}).get("url", ""),
+        })
+
+    return jsonify({"results": results})
 
 
 # ---------------- Socket.IO events ----------------
