@@ -193,6 +193,62 @@
     gap: 8px;
   }
 
+  .yt-suggestions {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    max-height: 320px;
+    overflow-y: auto;
+    z-index: 30;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+  }
+  .yt-suggestions.open { display: block; }
+
+  .yt-suggestion-item {
+    display: flex;
+    gap: 10px;
+    padding: 8px 10px;
+    cursor: pointer;
+    align-items: center;
+    border-bottom: 1px solid var(--line);
+  }
+  .yt-suggestion-item:last-child { border-bottom: none; }
+  .yt-suggestion-item:hover { background: rgba(255,255,255,0.06); }
+
+  .yt-suggestion-item img {
+    width: 64px;
+    height: 48px;
+    object-fit: cover;
+    border-radius: 6px;
+    flex-shrink: 0;
+    background: #000;
+  }
+
+  .yt-suggestion-text {
+    overflow: hidden;
+  }
+
+  .yt-suggestion-title {
+    font-size: 12.5px;
+    line-height: 1.3;
+    color: var(--text);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .yt-suggestion-channel {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+
   .url-bar input {
     flex: 1;
     padding: 10px 12px;
@@ -505,8 +561,11 @@
 <div class="layout">
   <div class="main" id="main-panel">
     <div class="controls-panel" id="controls-panel">
-      <div class="url-bar">
-        <input type="text" id="yt-search-input" placeholder="Search YouTube for a movie or video...">
+      <div class="url-bar" style="position: relative;">
+        <div style="position: relative; flex: 1;">
+          <input type="text" id="yt-search-input" placeholder="Search YouTube for a movie or video..." autocomplete="off">
+          <div class="yt-suggestions" id="yt-suggestions"></div>
+        </div>
         <button id="yt-search-btn">🔍 Search on YouTube</button>
       </div>
       <div class="url-bar">
@@ -665,15 +724,84 @@
     socket.emit('set_video', { room: ROOM, url: url });
   });
 
-  // ---- YouTube search shortcut ----
+  // ---- YouTube search: live suggestions ----
+  const ytSearchInput = document.getElementById('yt-search-input');
+  const ytSuggestionsBox = document.getElementById('yt-suggestions');
+  let ytSearchDebounce = null;
+  let ytSearchAbort = null;
+
+  function closeYtSuggestions() {
+    ytSuggestionsBox.classList.remove('open');
+    ytSuggestionsBox.innerHTML = '';
+  }
+
+  function renderYtSuggestions(results) {
+    ytSuggestionsBox.innerHTML = '';
+    if (!results.length) { closeYtSuggestions(); return; }
+    results.forEach(r => {
+      const item = document.createElement('div');
+      item.className = 'yt-suggestion-item';
+
+      const img = document.createElement('img');
+      img.src = r.thumbnail || '';
+      item.appendChild(img);
+
+      const textWrap = document.createElement('div');
+      textWrap.className = 'yt-suggestion-text';
+      const title = document.createElement('div');
+      title.className = 'yt-suggestion-title';
+      title.textContent = r.title;
+      const channel = document.createElement('div');
+      channel.className = 'yt-suggestion-channel';
+      channel.textContent = r.channel;
+      textWrap.appendChild(title);
+      textWrap.appendChild(channel);
+      item.appendChild(textWrap);
+
+      item.addEventListener('click', () => {
+        socket.emit('set_video', { room: ROOM, url: 'https://www.youtube.com/watch?v=' + r.video_id });
+        ytSearchInput.value = '';
+        closeYtSuggestions();
+      });
+
+      ytSuggestionsBox.appendChild(item);
+    });
+    ytSuggestionsBox.classList.add('open');
+  }
+
+  ytSearchInput.addEventListener('input', () => {
+    const q = ytSearchInput.value.trim();
+    clearTimeout(ytSearchDebounce);
+    if (!q) { closeYtSuggestions(); return; }
+    ytSearchDebounce = setTimeout(async () => {
+      try {
+        if (ytSearchAbort) ytSearchAbort.abort();
+        ytSearchAbort = new AbortController();
+        const res = await fetch('/api/youtube_search?q=' + encodeURIComponent(q), { signal: ytSearchAbort.signal });
+        const data = await res.json();
+        renderYtSuggestions(data.results || []);
+      } catch (err) {
+        // ignore aborted/failed requests
+      }
+    }, 350);
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!ytSuggestionsBox.contains(e.target) && e.target !== ytSearchInput) {
+      closeYtSuggestions();
+    }
+  });
+
+  // ---- YouTube search: fallback opens results in a new tab ----
+  // (Used if no results come back — e.g. the free API key isn't set up yet.)
   function openYoutubeSearch() {
-    const q = document.getElementById('yt-search-input').value.trim();
+    const q = ytSearchInput.value.trim();
     if (!q) return;
     window.open('https://www.youtube.com/results?search_query=' + encodeURIComponent(q), '_blank');
   }
   document.getElementById('yt-search-btn').addEventListener('click', openYoutubeSearch);
-  document.getElementById('yt-search-input').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') openYoutubeSearch();
+  ytSearchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !ytSuggestionsBox.classList.contains('open')) openYoutubeSearch();
   });
 
   // ---- Local file playback ----
@@ -695,10 +823,36 @@
   });
 
   const overlayBtn = document.getElementById('play-overlay-btn');
+  let overlayHideTimer = null;
 
   function updateOverlayIcon(isPlaying) {
     overlayBtn.textContent = isPlaying ? '⏸' : '▶';
+    if (isPlaying) {
+      scheduleOverlayFade();
+    } else {
+      clearTimeout(overlayHideTimer);
+      overlayBtn.classList.remove('hidden-fade');
+    }
   }
+
+  function scheduleOverlayFade() {
+    clearTimeout(overlayHideTimer);
+    overlayHideTimer = setTimeout(() => {
+      overlayBtn.classList.add('hidden-fade');
+    }, 1200);
+  }
+
+  function revealOverlayBriefly() {
+    overlayBtn.classList.remove('hidden-fade');
+    const isPlaying = (activeType === 'youtube' && ytPlayer && ytPlayer.getPlayerState() === YT.PlayerState.PLAYING)
+      || (activeType === 'direct' && !video.paused);
+    if (isPlaying) scheduleOverlayFade();
+  }
+
+  // Tapping anywhere on the video brings the button back briefly.
+  document.getElementById('stage').addEventListener('click', (e) => {
+    if (e.target !== overlayBtn) revealOverlayBriefly();
+  });
 
   function hideAllPlayers() {
     emptyStage.style.display = 'none';
@@ -716,6 +870,7 @@
     video.style.display = 'block';
     video.src = src;
     overlayBtn.style.display = 'flex';
+    overlayBtn.classList.remove('hidden-fade');
     updateOverlayIcon(false);
   }
 
@@ -733,6 +888,7 @@
     activeType = 'youtube';
     ytContainer.style.display = 'block';
     overlayBtn.style.display = 'flex';
+    overlayBtn.classList.remove('hidden-fade');
     updateOverlayIcon(!!autoplay);
 
     if (!ytReady) {
