@@ -137,6 +137,27 @@
   }
   #exit-btn:hover { background: rgba(220,80,80,0.12); }
 
+  #voice-btn {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 8px 14px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    user-select: none;
+    transition: background 0.15s, border-color 0.15s, transform 0.1s;
+  }
+  #voice-btn:hover { border-color: var(--accent); }
+  #voice-btn.enabled { border-color: var(--green); color: var(--green); }
+  #voice-btn.talking {
+    background: var(--green);
+    color: #06210f;
+    border-color: var(--green);
+    transform: scale(1.04);
+  }
+
   .controls-panel {
     display: flex;
     flex-direction: column;
@@ -554,6 +575,7 @@
       <button id="copy-btn">Copy</button>
     </div>
     <button id="toggle-controls-btn" title="Change video">⚙</button>
+    <button id="voice-btn" title="Click to enable voice chat">🎤 Enable Voice</button>
     <button id="exit-btn" title="Leave room">Exit</button>
   </div>
 </header>
@@ -575,7 +597,7 @@
         <button id="resync-btn" title="Sync everyone to your current position">🔄 Sync</button>
         <input type="file" id="local-file-input" accept="video/*" style="display:none;">
       </div>
-      <div class="hint">Tip: YouTube links work best (perfect auto-sync). For Google Drive or OneDrive, share the file as publicly viewable — large files may not load. Public Telegram channel posts (t.me/channel/123) play with Telegram's own controls — no auto-sync, use "🔄 Sync" manually. "Local File" plays a video already saved on your device — everyone needs the same file on their own phone for it to stay in sync.</div>
+      <div class="hint">Tip: YouTube links work best (perfect auto-sync). For Google Drive, share the file as "Anyone with the link" — large files may not load. "Local File" plays a video already saved on your device — everyone needs the same file on their own phone for it to stay in sync. If playback ever falls out of sync, press "🔄 Sync" to bring everyone to your current position.</div>
     </div>
 
     <div class="stage" id="stage">
@@ -585,7 +607,6 @@
       </div>
       <video id="player" style="display:none;" playsinline></video>
       <div id="yt-player" style="display:none; width:100%; height:100%;"></div>
-      <iframe id="telegram-player" style="display:none; width:100%; height:100%; border:0;" allow="autoplay; fullscreen" allowfullscreen></iframe>
       <button id="play-overlay-btn" style="display:none;" title="Play/Pause">▶</button>
     </div>
     <div class="hint" id="fallback-note" style="display:none; color:var(--accent);">
@@ -646,7 +667,6 @@
 
   const video = document.getElementById('player');
   const ytContainer = document.getElementById('yt-player');
-  const telegramFrame = document.getElementById('telegram-player');
   const emptyStage = document.getElementById('empty-stage');
   const fallbackNote = document.getElementById('fallback-note');
   const messagesEl = document.getElementById('messages');
@@ -664,6 +684,112 @@
     socket.emit('join', { room: ROOM, name: NAME });
   });
 
+  // ---- Voice chat (push-to-talk, WebRTC peer-to-peer) ----
+  const voiceBtn = document.getElementById('voice-btn');
+  const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
+  let micStream = null;
+  let voiceEnabled = false;
+  const peerConnections = {}; // socket id -> RTCPeerConnection
+
+  function createVoicePeer(targetSid) {
+    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    if (micStream) {
+      micStream.getTracks().forEach(track => pc.addTrack(track, micStream));
+    }
+    pc.onicecandidate = (e) => {
+      if (e.candidate) {
+        socket.emit('voice_ice_candidate', { target: targetSid, candidate: e.candidate });
+      }
+    };
+    pc.ontrack = (e) => {
+      let audioEl = document.getElementById('voice-audio-' + targetSid);
+      if (!audioEl) {
+        audioEl = document.createElement('audio');
+        audioEl.id = 'voice-audio-' + targetSid;
+        audioEl.autoplay = true;
+        document.body.appendChild(audioEl);
+      }
+      audioEl.srcObject = e.streams[0];
+    };
+    peerConnections[targetSid] = pc;
+    return pc;
+  }
+
+  function closeVoicePeer(sid) {
+    const pc = peerConnections[sid];
+    if (pc) { pc.close(); delete peerConnections[sid]; }
+    const audioEl = document.getElementById('voice-audio-' + sid);
+    if (audioEl) audioEl.remove();
+  }
+
+  socket.on('voice_peer_joined', async (data) => {
+    if (!voiceEnabled) return; // only connect if I've opted into voice too
+    const pc = createVoicePeer(data.sid);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    socket.emit('voice_offer', { target: data.sid, sdp: offer });
+  });
+
+  socket.on('voice_offer', async (data) => {
+    if (!voiceEnabled) return;
+    const pc = createVoicePeer(data.sender);
+    await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    socket.emit('voice_answer', { target: data.sender, sdp: answer });
+  });
+
+  socket.on('voice_answer', async (data) => {
+    const pc = peerConnections[data.sender];
+    if (pc) await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+  });
+
+  socket.on('voice_ice_candidate', async (data) => {
+    const pc = peerConnections[data.sender];
+    if (pc && data.candidate) {
+      try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch (err) {}
+    }
+  });
+
+  socket.on('voice_peer_left', (data) => closeVoicePeer(data.sid));
+
+  async function enableVoice() {
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      alert("Couldn't access the microphone. Check your browser/site permissions.");
+      return;
+    }
+    micStream.getAudioTracks().forEach(t => t.enabled = false); // starts muted
+    voiceEnabled = true;
+    voiceBtn.textContent = '🎤 Hold to Talk';
+    voiceBtn.classList.add('enabled');
+    voiceBtn.title = 'Press and hold to talk';
+    socket.emit('voice_join', { room: ROOM });
+  }
+
+  function startTalking() {
+    if (!voiceEnabled || !micStream) return;
+    micStream.getAudioTracks().forEach(t => t.enabled = true);
+    voiceBtn.classList.add('talking');
+  }
+
+  function stopTalking() {
+    if (!micStream) return;
+    micStream.getAudioTracks().forEach(t => t.enabled = false);
+    voiceBtn.classList.remove('talking');
+  }
+
+  voiceBtn.addEventListener('click', () => {
+    if (!voiceEnabled) enableVoice();
+  });
+  voiceBtn.addEventListener('mousedown', (e) => { if (voiceEnabled) { e.preventDefault(); startTalking(); } });
+  voiceBtn.addEventListener('touchstart', (e) => { if (voiceEnabled) { e.preventDefault(); startTalking(); } }, { passive: false });
+  voiceBtn.addEventListener('mouseup', stopTalking);
+  voiceBtn.addEventListener('mouseleave', stopTalking);
+  voiceBtn.addEventListener('touchend', stopTalking);
+  voiceBtn.addEventListener('touchcancel', stopTalking);
+
   // ---- Cinema mode: hide the URL bar/hint once a video is loaded ----
   document.getElementById('toggle-controls-btn').addEventListener('click', () => {
     mainPanel.classList.toggle('collapsed');
@@ -678,6 +804,8 @@
   // ---- Exit room ----
   document.getElementById('exit-btn').addEventListener('click', () => {
     if (confirm('Leave this room?')) {
+      if (micStream) micStream.getTracks().forEach(t => t.stop());
+      Object.keys(peerConnections).forEach(closeVoicePeer);
       socket.disconnect();
       window.location.href = '/';
     }
@@ -861,7 +989,6 @@
     fallbackNote.style.display = 'none';
     video.style.display = 'none';
     ytContainer.style.display = 'none';
-    telegramFrame.style.display = 'none';
     overlayBtn.style.display = 'none';
     document.getElementById('stage').classList.remove('drive-fallback');
     if (ytPollTimer) { clearInterval(ytPollTimer); ytPollTimer = null; }
@@ -875,15 +1002,6 @@
     overlayBtn.style.display = 'flex';
     overlayBtn.classList.remove('hidden-fade');
     updateOverlayIcon(false);
-  }
-
-  function showTelegram(embedUrl) {
-    hideAllPlayers();
-    activeType = 'telegram';
-    telegramFrame.style.display = 'block';
-    telegramFrame.src = embedUrl;
-    // Telegram's own player keeps its controls — no custom overlay or
-    // auto-sync here, same as opening the post directly in Telegram.
   }
 
   let currentCloudProvider = 'Drive';
@@ -978,8 +1096,7 @@
   }
 
   // If the direct <video> fails to load (common with restricted/large
-  // Drive or OneDrive files), show a plain error instead of any
-  // third-party player.
+  // Drive files), show a plain error instead of any third-party player.
   video.addEventListener('error', () => {
     if (activeType === 'direct' && currentCloudProvider) {
       showCloudError();
@@ -999,16 +1116,6 @@
       } else {
         showCloudError();
       }
-    } else if (videoInfo.type === 'onedrive') {
-      currentCloudProvider = 'OneDrive';
-      if (videoInfo.video_url) {
-        showDirectVideo(videoInfo.video_url);
-      } else {
-        showCloudError();
-      }
-    } else if (videoInfo.type === 'telegram') {
-      currentCloudProvider = null;
-      showTelegram(videoInfo.embed_url);
     } else {
       currentCloudProvider = null;
       showDirectVideo(videoInfo.video_url);
@@ -1027,7 +1134,7 @@
     suppressEmit = true;
     loadVideo(data.video, data.time || 0, data.state === 'playing');
 
-    if (data.video.type === 'direct' || data.video.type === 'drive' || data.video.type === 'onedrive') {
+    if (data.video.type === 'direct' || data.video.type === 'drive') {
       const targetTime = data.time || 0;
       const shouldPlay = data.state === 'playing';
       const applySeek = () => {
