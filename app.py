@@ -78,6 +78,16 @@ def parse_video_source(url: str):
             "embed_url": f"https://t.me/{channel}/{post_id}?embed=1",
         }
 
+    # --- OneDrive / SharePoint ---
+    # Same idea as the Drive trick: append a download flag to the share
+    # link. Microsoft changes this behavior periodically, so it's treated
+    # as "attempt direct playback, show a clean error if it fails" — same
+    # as Drive, not a guaranteed-working path.
+    if re.search(r"(1drv\.ms|onedrive\.live\.com|[\w-]+\.sharepoint\.com)", url):
+        sep = "&" if "?" in url else "?"
+        direct_url = url if "download=1" in url else f"{url}{sep}download=1"
+        return {"type": "onedrive", "video_url": direct_url}
+
     # --- Anything else: treat as a plain direct video URL ---
     return {"type": "direct", "video_url": url}
 
