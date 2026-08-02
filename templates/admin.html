@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin — Watch Together</title>
+<style>
+  :root {
+    --bg: #000000;
+    --surface: #0A0A0A;
+    --surface-2: #151515;
+    --accent: #6C9BCF;
+    --text: #F2EFE9;
+    --muted: #8A8A8A;
+    --line: #232323;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, 'Inter', sans-serif;
+    padding: 28px;
+  }
+  h1 {
+    font-size: 22px;
+    margin: 0 0 4px;
+  }
+  .sub {
+    color: var(--muted);
+    font-size: 13px;
+    margin-bottom: 22px;
+  }
+  .stat {
+    display: inline-block;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 20px;
+    margin-bottom: 24px;
+  }
+  .stat .num {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--accent);
+  }
+  .stat .label {
+    font-size: 12px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  th, td {
+    text-align: left;
+    padding: 10px 14px;
+    font-size: 13px;
+    border-bottom: 1px solid var(--line);
+  }
+  th {
+    color: var(--muted);
+    text-transform: uppercase;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    background: var(--surface-2);
+  }
+  tr:last-child td { border-bottom: none; }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+  <h1>Watch Together — Admin</h1>
+  <div class="sub">List of everyone who has signed in with Google.</div>
+
+  <div class="stat">
+    <div class="num">{{ total }}</div>
+    <div class="label">Total users</div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Email</th>
+        <th>First signed in</th>
+        <th>Last login</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td>{{ u.name }}</td>
+        <td class="muted">{{ u.email }}</td>
+        <td class="muted">{{ u.created_at[:16].replace('T', ' ') }}</td>
+        <td class="muted">{{ u.last_login[:16].replace('T', ' ') }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="muted">No users yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>
