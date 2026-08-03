@@ -4,10 +4,12 @@ import random
 import string
 import time
 import json
-import sqlite3
 import urllib.request
 import urllib.parse
 from datetime import datetime, timedelta, timezone
+
+import psycopg2
+import psycopg2.extras
 
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 from flask_socketio import SocketIO, join_room, leave_room, emit
@@ -22,6 +24,7 @@ YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 FREE_TRIAL_MINUTES = 10
 RENAME_COOLDOWN_HOURS = 24
@@ -35,25 +38,26 @@ google_oauth = oauth.register(
     client_kwargs={"scope": "openid email profile"},
 )
 
-# ---------------- Database (SQLite) ----------------
-# NOTE: on Render's free tier, disk storage is wiped whenever the app
-# restarts/redeploys — so this data is not permanently guaranteed to
-# survive. Good enough to get the feature working; swap for a hosted
-# Postgres (e.g. Supabase, free tier) later for real persistence.
-DB_PATH = os.path.join(os.path.dirname(__file__), "users.db")
+# ---------------- Database (Postgres / Supabase) ----------------
+# Uses the free Supabase Postgres database via DATABASE_URL so user data
+# survives restarts/redeploys, unlike storing it on Render's local disk.
 
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
     return conn
 
 
 def init_db():
+    if not DATABASE_URL:
+        # Not configured yet — video/room features still work fine,
+        # login just won't until DATABASE_URL is set.
+        return
     conn = get_db()
-    conn.execute("""
+    cur = conn.cursor()
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             google_id TEXT UNIQUE NOT NULL,
             email TEXT NOT NULL,
             name TEXT NOT NULL,
@@ -63,6 +67,7 @@ def init_db():
         )
     """)
     conn.commit()
+    cur.close()
     conn.close()
 
 
@@ -71,7 +76,10 @@ init_db()
 
 def get_user_by_id(user_id):
     conn = get_db()
-    row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+    row = cur.fetchone()
+    cur.close()
     conn.close()
     return dict(row) if row else None
 
@@ -79,20 +87,25 @@ def get_user_by_id(user_id):
 def upsert_user(google_id, email, name):
     now = datetime.now(timezone.utc).isoformat()
     conn = get_db()
-    existing = conn.execute("SELECT * FROM users WHERE google_id = ?", (google_id,)).fetchone()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM users WHERE google_id = %s", (google_id,))
+    existing = cur.fetchone()
     if existing:
-        conn.execute("UPDATE users SET last_login = ? WHERE google_id = ?", (now, google_id))
+        cur.execute("UPDATE users SET last_login = %s WHERE google_id = %s", (now, google_id))
         conn.commit()
         user_id = existing["id"]
     else:
-        cur = conn.execute(
-            "INSERT INTO users (google_id, email, name, created_at, last_login) VALUES (?, ?, ?, ?, ?)",
+        cur.execute(
+            "INSERT INTO users (google_id, email, name, created_at, last_login) VALUES (%s, %s, %s, %s, %s) RETURNING id",
             (google_id, email, name, now, now),
         )
+        user_id = cur.fetchone()["id"]
         conn.commit()
-        user_id = cur.lastrowid
+    cur.close()
     conn.close()
     return get_user_by_id(user_id)
+
+
 
 # In-memory room storage.
 # rooms = {
@@ -241,8 +254,10 @@ def account_rename():
 
     now = datetime.now(timezone.utc).isoformat()
     conn = get_db()
-    conn.execute("UPDATE users SET name = ?, last_renamed_at = ? WHERE id = ?", (new_name, now, user["id"]))
+    cur = conn.cursor()
+    cur.execute("UPDATE users SET name = %s, last_renamed_at = %s WHERE id = %s", (new_name, now, user["id"]))
     conn.commit()
+    cur.close()
     conn.close()
     return jsonify({"ok": True, "name": new_name})
 
@@ -264,7 +279,10 @@ def admin_dashboard():
         """, 401
 
     conn = get_db()
-    users = conn.execute("SELECT * FROM users ORDER BY created_at DESC").fetchall()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM users ORDER BY created_at DESC")
+    users = [dict(row) for row in cur.fetchall()]
+    cur.close()
     conn.close()
     return render_template("admin.html", users=users, total=len(users))
 
