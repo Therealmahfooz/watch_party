@@ -6,105 +6,15 @@ import time
 import json
 import urllib.request
 import urllib.parse
-from datetime import datetime, timedelta, timezone
-
-import psycopg2
-import psycopg2.extras
 
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 from flask_socketio import SocketIO, join_room, leave_room, emit
-from authlib.integrations.flask_client import OAuth
 
 app = Flask(__name__)
-app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "change-this-to-something-random-in-production")
+app.config["SECRET_KEY"] = "change-this-to-something-random-in-production"
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
-
-GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
-GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
-
-FREE_TRIAL_MINUTES = 10
-RENAME_COOLDOWN_HOURS = 24
-
-oauth = OAuth(app)
-google_oauth = oauth.register(
-    name="google",
-    client_id=GOOGLE_CLIENT_ID,
-    client_secret=GOOGLE_CLIENT_SECRET,
-    server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
-    client_kwargs={"scope": "openid email profile"},
-)
-
-# ---------------- Database (Postgres / Supabase) ----------------
-# Uses the free Supabase Postgres database via DATABASE_URL so user data
-# survives restarts/redeploys, unlike storing it on Render's local disk.
-
-
-def get_db():
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
-    return conn
-
-
-def init_db():
-    if not DATABASE_URL:
-        # Not configured yet — video/room features still work fine,
-        # login just won't until DATABASE_URL is set.
-        return
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            google_id TEXT UNIQUE NOT NULL,
-            email TEXT NOT NULL,
-            name TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            last_login TEXT NOT NULL,
-            last_renamed_at TEXT
-        )
-    """)
-    conn.commit()
-    cur.close()
-    conn.close()
-
-
-init_db()
-
-
-def get_user_by_id(user_id):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM users WHERE id = %s", (user_id,))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
-    return dict(row) if row else None
-
-
-def upsert_user(google_id, email, name):
-    now = datetime.now(timezone.utc).isoformat()
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM users WHERE google_id = %s", (google_id,))
-    existing = cur.fetchone()
-    if existing:
-        cur.execute("UPDATE users SET last_login = %s WHERE google_id = %s", (now, google_id))
-        conn.commit()
-        user_id = existing["id"]
-    else:
-        cur.execute(
-            "INSERT INTO users (google_id, email, name, created_at, last_login) VALUES (%s, %s, %s, %s, %s) RETURNING id",
-            (google_id, email, name, now, now),
-        )
-        user_id = cur.fetchone()["id"]
-        conn.commit()
-    cur.close()
-    conn.close()
-    return get_user_by_id(user_id)
-
 
 
 # In-memory room storage.
@@ -175,124 +85,14 @@ def current_playback_time(room):
     return r["time"]
 
 
-def current_user():
-    user_id = session.get("user_id")
-    if not user_id:
-        return None
-    return get_user_by_id(user_id)
-
-
-def trial_expired():
-    """True if a logged-out visitor has used up their 10 free minutes."""
-    if current_user():
-        return False  # logged-in users have unlimited access
-    started = session.get("guest_started_at")
-    if not started:
-        session["guest_started_at"] = time.time()
-        return False
-    return (time.time() - started) > FREE_TRIAL_MINUTES * 60
-
-
-def trial_seconds_left():
-    started = session.get("guest_started_at")
-    if not started:
-        return FREE_TRIAL_MINUTES * 60
-    remaining = FREE_TRIAL_MINUTES * 60 - (time.time() - started)
-    return max(0, int(remaining))
-
-
 @app.route("/", methods=["GET"])
 def index():
-    user = current_user()
-    if trial_expired():
-        return render_template("index.html", trial_expired=True, user=user)
-    return render_template("index.html", user=user, trial_seconds_left=trial_seconds_left())
-
-
-@app.route("/login")
-def login():
-    redirect_uri = url_for("auth_callback", _external=True)
-    return google_oauth.authorize_redirect(redirect_uri)
-
-
-@app.route("/auth/callback")
-def auth_callback():
-    token = google_oauth.authorize_access_token()
-    userinfo = token.get("userinfo") or google_oauth.parse_id_token(token)
-    google_id = userinfo["sub"]
-    email = userinfo.get("email", "")
-    name = userinfo.get("name") or email.split("@")[0]
-
-    user = upsert_user(google_id, email, name)
-    session["user_id"] = user["id"]
-    session.pop("guest_started_at", None)
-    return redirect(url_for("index"))
-
-
-@app.route("/logout")
-def logout():
-    session.pop("user_id", None)
-    return redirect(url_for("index"))
-
-
-@app.route("/account/rename", methods=["POST"])
-def account_rename():
-    user = current_user()
-    if not user:
-        return jsonify({"ok": False, "error": "Not logged in"}), 401
-
-    new_name = request.form.get("name", "").strip()[:40]
-    if not new_name:
-        return jsonify({"ok": False, "error": "Name can't be empty"}), 400
-
-    if user["last_renamed_at"]:
-        last = datetime.fromisoformat(user["last_renamed_at"])
-        if datetime.now(timezone.utc) - last < timedelta(hours=RENAME_COOLDOWN_HOURS):
-            wait = timedelta(hours=RENAME_COOLDOWN_HOURS) - (datetime.now(timezone.utc) - last)
-            hours_left = int(wait.total_seconds() // 3600) + 1
-            return jsonify({"ok": False, "error": f"You can rename again in about {hours_left}h"}), 429
-
-    now = datetime.now(timezone.utc).isoformat()
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("UPDATE users SET name = %s, last_renamed_at = %s WHERE id = %s", (new_name, now, user["id"]))
-    conn.commit()
-    cur.close()
-    conn.close()
-    return jsonify({"ok": True, "name": new_name})
-
-
-@app.route("/admin")
-def admin_dashboard():
-    if not ADMIN_PASSWORD:
-        return "Admin dashboard isn't set up — add an ADMIN_PASSWORD environment variable.", 503
-    if request.args.get("password") != ADMIN_PASSWORD:
-        return """
-            <body style="background:#000;color:#fff;font-family:sans-serif;display:flex;
-            align-items:center;justify-content:center;height:100vh;">
-            <form method="get" style="text-align:center;">
-              <input type="password" name="password" placeholder="Admin password"
-                     style="padding:10px;border-radius:6px;border:1px solid #444;background:#111;color:#fff;">
-              <button style="padding:10px 16px;border-radius:6px;border:none;background:#6C9BCF;
-                      color:#000;font-weight:bold;cursor:pointer;">Enter</button>
-            </form></body>
-        """, 401
-
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM users ORDER BY created_at DESC")
-    users = [dict(row) for row in cur.fetchall()]
-    cur.close()
-    conn.close()
-    return render_template("admin.html", users=users, total=len(users))
+    return render_template("index.html")
 
 
 @app.route("/create", methods=["POST"])
 def create_room():
-    if trial_expired():
-        return redirect(url_for("index"))
-    user = current_user()
-    name = (user["name"] if user else request.form.get("name", "").strip()) or "Guest"
+    name = request.form.get("name", "").strip() or "Guest"
     code = make_room_code()
     rooms[code] = {
         "video": None,
@@ -306,13 +106,10 @@ def create_room():
 
 @app.route("/join", methods=["POST"])
 def join_room_route():
-    if trial_expired():
-        return redirect(url_for("index"))
-    user = current_user()
-    name = (user["name"] if user else request.form.get("name", "").strip()) or "Guest"
+    name = request.form.get("name", "").strip() or "Guest"
     code = request.form.get("code", "").strip().upper()
     if code not in rooms:
-        return render_template("index.html", error="Room not found. Check the code and try again.", user=user)
+        return render_template("index.html", error="Room not found. Check the code and try again.")
     return redirect(url_for("room", code=code, name=name))
 
 
