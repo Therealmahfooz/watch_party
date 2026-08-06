@@ -583,7 +583,7 @@
       <button id="copy-btn">Copy</button>
     </div>
     <button id="toggle-controls-btn" title="Change video">⚙</button>
-    <button id="voice-btn" title="Click to enable voice chat">🎤 Enable Voice</button>
+    <button id="voice-btn" title="Click to enable voice chat">🎤</button>
     <button id="exit-btn" title="Leave room">Exit</button>
   </div>
 </header>
@@ -599,7 +599,7 @@
         <button id="yt-search-btn">🔍 Search on YouTube</button>
       </div>
       <div class="url-bar">
-        <input type="text" id="video-url" placeholder="Paste a YouTube link, Google Drive link, or video URL">
+        <input type="text" id="video-url" placeholder="Paste a YouTube link, Google Drive link, or video URL" autocomplete="off" data-lpignore="true" data-1p-ignore>
         <button id="load-btn">Load Video</button>
         <button id="local-file-btn" title="Play a video already saved on this device">📁 Local File</button>
         <button id="resync-btn" title="Sync everyone to your current position">🔄 Sync</button>
@@ -639,7 +639,7 @@
       <button id="reply-cancel-btn" title="Cancel reply">✕</button>
     </div>
     <div class="chat-input">
-      <input type="text" id="chat-text" placeholder="Type a message...">
+      <input type="text" id="chat-text" placeholder="Type a message..." autocomplete="off" autocorrect="off" name="chat-message-text" data-lpignore="true" data-1p-ignore data-form-type="other">
       <button id="send-btn">Send</button>
     </div>
   </div>
@@ -761,42 +761,49 @@
 
   socket.on('voice_peer_left', (data) => closeVoicePeer(data.sid));
 
+  let isTalking = false;
+
   async function enableVoice() {
     try {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (err) {
       alert("Couldn't access the microphone. Check your browser/site permissions.");
-      return;
+      return false;
     }
     micStream.getAudioTracks().forEach(t => t.enabled = false); // starts muted
     voiceEnabled = true;
-    voiceBtn.textContent = '🎤 Hold to Talk';
     voiceBtn.classList.add('enabled');
-    voiceBtn.title = 'Press and hold to talk';
     socket.emit('voice_join', { room: ROOM });
+    return true;
   }
 
   function startTalking() {
     if (!voiceEnabled || !micStream) return;
     micStream.getAudioTracks().forEach(t => t.enabled = true);
+    isTalking = true;
     voiceBtn.classList.add('talking');
+    voiceBtn.title = 'Click to mute';
   }
 
   function stopTalking() {
     if (!micStream) return;
     micStream.getAudioTracks().forEach(t => t.enabled = false);
+    isTalking = false;
     voiceBtn.classList.remove('talking');
+    voiceBtn.title = 'Click to talk';
   }
 
-  voiceBtn.addEventListener('click', () => {
-    if (!voiceEnabled) enableVoice();
+  voiceBtn.addEventListener('click', async () => {
+    if (!voiceEnabled) {
+      const ok = await enableVoice();
+      if (!ok) return;
+    }
+    if (isTalking) {
+      stopTalking();
+    } else {
+      startTalking();
+    }
   });
-  voiceBtn.addEventListener('mousedown', (e) => { if (voiceEnabled) { e.preventDefault(); startTalking(); } });
-  voiceBtn.addEventListener('touchstart', (e) => { if (voiceEnabled) { e.preventDefault(); startTalking(); } }, { passive: false });
-  voiceBtn.addEventListener('mouseup', stopTalking);
-  voiceBtn.addEventListener('mouseleave', stopTalking);
-  voiceBtn.addEventListener('touchend', stopTalking);
-  voiceBtn.addEventListener('touchcancel', stopTalking);
 
   // ---- Cinema mode: hide the URL bar/hint once a video is loaded ----
   document.getElementById('toggle-controls-btn').addEventListener('click', () => {
