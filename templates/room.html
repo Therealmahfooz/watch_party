@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=overlays-content">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content">
 <title>Room {{ code }} — Watch Together</title>
 <link rel="manifest" href="/static/manifest.json">
 <link rel="icon" href="/static/icon-192.png">
@@ -1433,5 +1433,10 @@
   });
 </script>
 
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/static/sw.js');
+    }
+  </script>
 </body>
 </html>
