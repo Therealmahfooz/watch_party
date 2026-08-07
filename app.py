@@ -29,6 +29,18 @@ YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
 # }
 rooms = {}
 
+ROOM_EMPTY_TIMEOUT_SECONDS = 30 * 60  # delete a room 30 min after everyone leaves
+
+
+def cleanup_stale_rooms():
+    now = time.time()
+    stale = [
+        code for code, r in rooms.items()
+        if not r["users"] and r.get("empty_since") and (now - r["empty_since"]) > ROOM_EMPTY_TIMEOUT_SECONDS
+    ]
+    for code in stale:
+        del rooms[code]
+
 
 def make_room_code(length=6):
     alphabet = string.ascii_uppercase + string.digits
@@ -92,6 +104,7 @@ def index():
 
 @app.route("/create", methods=["POST"])
 def create_room():
+    cleanup_stale_rooms()
     name = request.form.get("name", "").strip() or "Guest"
     code = make_room_code()
     rooms[code] = {
@@ -100,6 +113,7 @@ def create_room():
         "time": 0.0,
         "updated_at": time.time(),
         "users": {},
+        "empty_since": None,
     }
     return redirect(url_for("room", code=code, name=name))
 
@@ -170,6 +184,7 @@ def on_join(data):
 
     join_room(room_code)
     rooms[room_code]["users"][request.sid] = name
+    rooms[room_code]["empty_since"] = None
 
     # Send the newcomer the current state of the room so they sync up.
     emit("sync_state", {
@@ -308,6 +323,8 @@ def on_disconnect():
             emit("system_message", {"text": f"{name} left the room"}, room=room_code)
             emit("user_list", {"users": list(r["users"].values())}, room=room_code)
             emit("voice_peer_left", {"sid": request.sid}, room=room_code)
+            if not r["users"]:
+                r["empty_since"] = time.time()
 
 
 if __name__ == "__main__":
