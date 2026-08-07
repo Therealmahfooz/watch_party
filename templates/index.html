@@ -256,6 +256,22 @@
         document.getElementById('panel-' + tab.dataset.panel).classList.add('active');
       });
     });
+
+    // Arrived via a shared invite link (?join=CODE) — jump straight to the
+    // Join tab with the room code already filled in.
+    const joinCode = new URLSearchParams(window.location.search).get('join');
+    if (joinCode) {
+      document.querySelector('.tab[data-panel="join"]').click();
+      const codeInput = document.querySelector('#panel-join input[name="code"]');
+      if (codeInput) codeInput.value = joinCode.toUpperCase();
+      const nameInput = document.querySelector('#panel-join input[name="name"]');
+      if (nameInput) nameInput.focus();
+    }
+  </script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/static/sw.js');
+    }
   </script>
 </body>
 </html>

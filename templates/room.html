@@ -158,13 +158,27 @@
     transition: background 0.15s, border-color 0.15s, transform 0.1s;
   }
   #voice-btn:hover { border-color: var(--accent); }
-  #voice-btn.enabled { border-color: var(--green); color: var(--green); }
-  #voice-btn.talking {
+  #voice-btn.enabled {
     background: var(--green);
     color: #06210f;
     border-color: var(--green);
-    transform: scale(1.04);
   }
+
+  #speaker-btn {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-size: 15px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  #speaker-btn:hover { border-color: var(--accent); }
+  #speaker-btn.enabled { border-color: var(--accent); background: var(--accent-dim, var(--surface-2)); }
 
   .controls-panel {
     display: flex;
@@ -340,6 +354,31 @@
   }
   #play-overlay-btn:hover { background: rgba(0,0,0,0.75); }
   #play-overlay-btn.hidden-fade { opacity: 0; pointer-events: none; }
+
+  .seek-btn {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.5);
+    border: 2px solid rgba(255,255,255,0.5);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    z-index: 10;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    transition: opacity 0.2s, background 0.2s;
+  }
+  .seek-btn:hover { background: rgba(0,0,0,0.75); }
+  .seek-btn.hidden-fade { opacity: 0; pointer-events: none; }
+  #seek-back-btn { left: calc(50% - 88px); }
+  #seek-fwd-btn { left: calc(50% + 40px); }
 
   .stage video {
     width: 100%;
@@ -581,9 +620,11 @@
         <div class="code" id="room-code">{{ code }}</div>
       </div>
       <button id="copy-btn">Copy</button>
+      <button id="share-btn" title="Share invite link">🔗</button>
     </div>
     <button id="toggle-controls-btn" title="Change video">⚙</button>
     <button id="voice-btn" title="Click to enable voice chat">🎤</button>
+    <button id="speaker-btn" style="display:none;" title="Turn on to hear the other person">🔇</button>
     <button id="exit-btn" title="Leave room">Exit</button>
   </div>
 </header>
@@ -615,7 +656,9 @@
       </div>
       <video id="player" style="display:none;" playsinline></video>
       <div id="yt-player" style="display:none; width:100%; height:100%;"></div>
+      <button id="seek-back-btn" class="seek-btn" style="display:none;" title="Back 10s">⏪ 10</button>
       <button id="play-overlay-btn" style="display:none;" title="Play/Pause">▶</button>
+      <button id="seek-fwd-btn" class="seek-btn" style="display:none;" title="Forward 10s">10 ⏩</button>
     </div>
     <div class="hint" id="fallback-note" style="display:none; color:var(--accent);">
       This Google Drive video couldn't be loaded directly — Drive is blocking or restricting this file. Try a YouTube link instead (most reliable), or use "📁 Local File" if everyone has the same video saved on their device.
@@ -673,6 +716,35 @@
   const NAME = "{{ name }}";
   const socket = io();
 
+  // ---- Screen wake lock (keep the screen on while a video is playing) ----
+  let wakeLock = null;
+
+  async function requestWakeLock() {
+    if (!('wakeLock' in navigator)) return;
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+    } catch (err) {
+      // Some browsers refuse this in certain contexts — harmless if it fails.
+    }
+  }
+
+  function releaseWakeLock() {
+    if (wakeLock) {
+      wakeLock.release().catch(() => {});
+      wakeLock = null;
+    }
+  }
+
+  // The OS auto-releases the wake lock when the tab is hidden — re-request
+  // it when coming back if a video is actively playing.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && wakeLock === null) {
+      const isPlaying = (activeType === 'youtube' && ytPlayer && ytPlayer.getPlayerState && ytPlayer.getPlayerState() === YT.PlayerState.PLAYING)
+        || (activeType === 'direct' && video && !video.paused);
+      if (isPlaying) requestWakeLock();
+    }
+  });
+
   const video = document.getElementById('player');
   const ytContainer = document.getElementById('yt-player');
   const emptyStage = document.getElementById('empty-stage');
@@ -692,11 +764,24 @@
     socket.emit('join', { room: ROOM, name: NAME });
   });
 
-  // ---- Voice chat (push-to-talk, WebRTC peer-to-peer) ----
+  // ---- Voice chat (continuous, WebRTC peer-to-peer) ----
   const voiceBtn = document.getElementById('voice-btn');
-  const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
+  const speakerBtn = document.getElementById('speaker-btn');
+
+  // Google's STUN server alone often fails to connect two phones on
+  // different mobile carriers (common "long distance friend" scenario) —
+  // adding a free public TURN relay as a fallback significantly improves
+  // real-world connection success when direct P2P isn't possible.
+  const ICE_SERVERS = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+  ];
+
   let micStream = null;
   let voiceEnabled = false;
+  let speakerEnabled = false; // OFF by default — you choose to hear the other person
   const peerConnections = {}; // socket id -> RTCPeerConnection
 
   function createVoicePeer(targetSid) {
@@ -718,6 +803,12 @@
         document.body.appendChild(audioEl);
       }
       audioEl.srcObject = e.streams[0];
+      audioEl.muted = !speakerEnabled;
+    };
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === 'failed' && pc.restartIce) {
+        pc.restartIce(); // one retry attempt on a dropped/failed connection
+      }
     };
     peerConnections[targetSid] = pc;
     return pc;
@@ -761,8 +852,6 @@
 
   socket.on('voice_peer_left', (data) => closeVoicePeer(data.sid));
 
-  let isTalking = false;
-
   async function enableVoice() {
     try {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -770,39 +859,42 @@
       alert("Couldn't access the microphone. Check your browser/site permissions.");
       return false;
     }
-    micStream.getAudioTracks().forEach(t => t.enabled = false); // starts muted
+    // Continuous — mic is live the moment voice chat is turned on, like a
+    // normal call, no need to hold anything down while watching together.
     voiceEnabled = true;
     voiceBtn.classList.add('enabled');
+    voiceBtn.title = 'Turn off voice chat';
+    speakerBtn.style.display = 'inline-flex';
     socket.emit('voice_join', { room: ROOM });
     return true;
   }
 
-  function startTalking() {
-    if (!voiceEnabled || !micStream) return;
-    micStream.getAudioTracks().forEach(t => t.enabled = true);
-    isTalking = true;
-    voiceBtn.classList.add('talking');
-    voiceBtn.title = 'Click to mute';
-  }
-
-  function stopTalking() {
-    if (!micStream) return;
-    micStream.getAudioTracks().forEach(t => t.enabled = false);
-    isTalking = false;
-    voiceBtn.classList.remove('talking');
-    voiceBtn.title = 'Click to talk';
+  function disableVoice() {
+    voiceEnabled = false;
+    if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+    Object.keys(peerConnections).forEach(closeVoicePeer);
+    voiceBtn.classList.remove('enabled');
+    voiceBtn.title = 'Click to enable voice chat';
+    speakerBtn.style.display = 'none';
   }
 
   voiceBtn.addEventListener('click', async () => {
-    if (!voiceEnabled) {
-      const ok = await enableVoice();
-      if (!ok) return;
-    }
-    if (isTalking) {
-      stopTalking();
+    if (voiceEnabled) {
+      disableVoice();
     } else {
-      startTalking();
+      await enableVoice();
     }
+  });
+
+  // ---- Speaker: controls whether YOU hear the other person. Off by
+  // default so audio never plays unexpectedly — you turn it on when ready.
+  speakerBtn.addEventListener('click', () => {
+    speakerEnabled = !speakerEnabled;
+    speakerBtn.classList.toggle('enabled', speakerEnabled);
+    speakerBtn.textContent = speakerEnabled ? '🔊' : '🔇';
+    document.querySelectorAll('audio[id^="voice-audio-"]').forEach(el => {
+      el.muted = !speakerEnabled;
+    });
   });
 
   // ---- Cinema mode: hide the URL bar/hint once a video is loaded ----
@@ -859,6 +951,25 @@
     const btn = document.getElementById('copy-btn');
     const old = btn.textContent;
     btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = old, 1200);
+  });
+
+  // ---- Share invite link (one tap join for whoever opens it) ----
+  document.getElementById('share-btn').addEventListener('click', async () => {
+    const link = `${window.location.origin}/?join=${ROOM}`;
+    const shareText = `Join me on Watch Together — room ${ROOM}`;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: 'Watch Together', text: shareText, url: link });
+        return;
+      } catch (err) {
+        return; // user cancelled the share sheet
+      }
+    }
+    navigator.clipboard.writeText(link);
+    const btn = document.getElementById('share-btn');
+    const old = btn.textContent;
+    btn.textContent = '✓';
     setTimeout(() => btn.textContent = old, 1200);
   });
 
@@ -968,6 +1079,8 @@
   });
 
   const overlayBtn = document.getElementById('play-overlay-btn');
+  const seekBackBtn = document.getElementById('seek-back-btn');
+  const seekFwdBtn = document.getElementById('seek-fwd-btn');
   let overlayHideTimer = null;
 
   function updateOverlayIcon(isPlaying) {
@@ -977,6 +1090,8 @@
     } else {
       clearTimeout(overlayHideTimer);
       overlayBtn.classList.remove('hidden-fade');
+      seekBackBtn.classList.remove('hidden-fade');
+      seekFwdBtn.classList.remove('hidden-fade');
     }
   }
 
@@ -984,20 +1099,40 @@
     clearTimeout(overlayHideTimer);
     overlayHideTimer = setTimeout(() => {
       overlayBtn.classList.add('hidden-fade');
+      seekBackBtn.classList.add('hidden-fade');
+      seekFwdBtn.classList.add('hidden-fade');
     }, 1200);
   }
 
   function revealOverlayBriefly() {
     overlayBtn.classList.remove('hidden-fade');
+    seekBackBtn.classList.remove('hidden-fade');
+    seekFwdBtn.classList.remove('hidden-fade');
     const isPlaying = (activeType === 'youtube' && ytPlayer && ytPlayer.getPlayerState() === YT.PlayerState.PLAYING)
       || (activeType === 'direct' && !video.paused);
     if (isPlaying) scheduleOverlayFade();
   }
 
-  // Tapping anywhere on the video brings the button back briefly.
+  // Tapping anywhere on the video brings the buttons back briefly.
   document.getElementById('stage').addEventListener('click', (e) => {
-    if (e.target !== overlayBtn) revealOverlayBriefly();
+    if (e.target !== overlayBtn && e.target !== seekBackBtn && e.target !== seekFwdBtn) revealOverlayBriefly();
   });
+
+  function seekBy(deltaSeconds) {
+    if (activeType === 'youtube' && ytPlayer) {
+      const t = Math.max(0, ytPlayer.getCurrentTime() + deltaSeconds);
+      ytPlayer.seekTo(t, true);
+      ytLastKnownTime = t;
+      socket.emit('seek', { room: ROOM, time: t });
+    } else if (activeType === 'direct') {
+      video.currentTime = Math.max(0, video.currentTime + deltaSeconds);
+      // The video's own 'seeked' listener picks this up and emits to the room.
+    }
+    revealOverlayBriefly();
+  }
+
+  seekBackBtn.addEventListener('click', () => seekBy(-10));
+  seekFwdBtn.addEventListener('click', () => seekBy(10));
 
   function hideAllPlayers() {
     emptyStage.style.display = 'none';
@@ -1005,6 +1140,8 @@
     video.style.display = 'none';
     ytContainer.style.display = 'none';
     overlayBtn.style.display = 'none';
+    seekBackBtn.style.display = 'none';
+    seekFwdBtn.style.display = 'none';
     document.getElementById('stage').classList.remove('drive-fallback');
     if (ytPollTimer) { clearInterval(ytPollTimer); ytPollTimer = null; }
   }
@@ -1016,6 +1153,10 @@
     video.src = src;
     overlayBtn.style.display = 'flex';
     overlayBtn.classList.remove('hidden-fade');
+    seekBackBtn.style.display = 'flex';
+    seekFwdBtn.style.display = 'flex';
+    seekBackBtn.classList.remove('hidden-fade');
+    seekFwdBtn.classList.remove('hidden-fade');
     updateOverlayIcon(false);
   }
 
@@ -1036,6 +1177,10 @@
     ytContainer.style.display = 'block';
     overlayBtn.style.display = 'flex';
     overlayBtn.classList.remove('hidden-fade');
+    seekBackBtn.style.display = 'flex';
+    seekFwdBtn.style.display = 'flex';
+    seekBackBtn.classList.remove('hidden-fade');
+    seekFwdBtn.classList.remove('hidden-fade');
     updateOverlayIcon(!!autoplay);
 
     if (!ytReady) {
@@ -1084,8 +1229,8 @@
   };
 
   function onYtStateChange(e) {
-    if (e.data === YT.PlayerState.PLAYING) updateOverlayIcon(true);
-    else if (e.data === YT.PlayerState.PAUSED) updateOverlayIcon(false);
+    if (e.data === YT.PlayerState.PLAYING) { updateOverlayIcon(true); requestWakeLock(); }
+    else if (e.data === YT.PlayerState.PAUSED) { updateOverlayIcon(false); releaseWakeLock(); }
     if (suppressEmit) return;
     if (e.data === YT.PlayerState.PLAYING) {
       socket.emit('play', { room: ROOM, time: ytPlayer.getCurrentTime() });
@@ -1235,13 +1380,13 @@
 
   // ---- Local <video> playback -> emit to room ----
   video.addEventListener('play', () => {
-    if (activeType === 'direct') updateOverlayIcon(true);
+    if (activeType === 'direct') { updateOverlayIcon(true); requestWakeLock(); }
     if (suppressEmit || activeType !== 'direct') return;
     socket.emit('play', { room: ROOM, time: video.currentTime });
   });
 
   video.addEventListener('pause', () => {
-    if (activeType === 'direct') updateOverlayIcon(false);
+    if (activeType === 'direct') { updateOverlayIcon(false); releaseWakeLock(); }
     if (suppressEmit || activeType !== 'direct') return;
     socket.emit('pause', { room: ROOM, time: video.currentTime });
   });
