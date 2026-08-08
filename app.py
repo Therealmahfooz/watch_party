@@ -106,6 +106,7 @@ def index():
 def create_room():
     cleanup_stale_rooms()
     name = request.form.get("name", "").strip() or "Guest"
+    pin = request.form.get("pin", "").strip()
     code = make_room_code()
     rooms[code] = {
         "video": None,
@@ -114,7 +115,11 @@ def create_room():
         "updated_at": time.time(),
         "users": {},
         "empty_since": None,
+        "pin": pin or None,
     }
+    verified = session.get("verified_rooms", [])
+    verified.append(code)
+    session["verified_rooms"] = verified
     return redirect(url_for("room", code=code, name=name))
 
 
@@ -122,8 +127,15 @@ def create_room():
 def join_room_route():
     name = request.form.get("name", "").strip() or "Guest"
     code = request.form.get("code", "").strip().upper()
+    pin = request.form.get("pin", "").strip()
     if code not in rooms:
         return render_template("index.html", error="Room not found. Check the code and try again.")
+    if rooms[code].get("pin") and rooms[code]["pin"] != pin:
+        return render_template("index.html", error="Incorrect room PIN.")
+    verified = session.get("verified_rooms", [])
+    if code not in verified:
+        verified.append(code)
+        session["verified_rooms"] = verified
     return redirect(url_for("room", code=code, name=name))
 
 
@@ -132,6 +144,10 @@ def room(code):
     code = code.upper()
     if code not in rooms:
         return redirect(url_for("index"))
+    if rooms[code].get("pin"):
+        verified = session.get("verified_rooms", [])
+        if code not in verified:
+            return redirect(url_for("index", join=code))
     name = request.args.get("name", "Guest")
     return render_template("room.html", code=code, name=name)
 
@@ -171,6 +187,60 @@ def youtube_search():
         })
 
     return jsonify({"results": results})
+
+
+@app.route("/api/youtube_related", methods=["GET"])
+def youtube_related():
+    video_id = request.args.get("video_id", "").strip()
+    if not video_id or not YOUTUBE_API_KEY:
+        return jsonify({"results": []})
+
+    # YouTube's search.list no longer supports "relatedToVideoId" (Google
+    # deprecated it in 2023), so we approximate "related videos" by looking
+    # up the current video's title (via the free oEmbed endpoint, no API
+    # key needed) and searching for videos with similar titles.
+    try:
+        oembed_url = "https://www.youtube.com/oembed?" + urllib.parse.urlencode({
+            "url": f"https://www.youtube.com/watch?v={video_id}",
+            "format": "json",
+        })
+        with urllib.request.urlopen(oembed_url, timeout=6) as resp:
+            title = json.load(resp).get("title", "")
+    except Exception:
+        title = ""
+
+    if not title:
+        return jsonify({"results": []})
+
+    params = urllib.parse.urlencode({
+        "part": "snippet",
+        "q": title,
+        "type": "video",
+        "maxResults": 8,
+        "key": YOUTUBE_API_KEY,
+    })
+    url = f"https://www.googleapis.com/youtube/v3/search?{params}"
+
+    try:
+        with urllib.request.urlopen(url, timeout=6) as resp:
+            data = json.load(resp)
+    except Exception:
+        return jsonify({"results": []})
+
+    results = []
+    for item in data.get("items", []):
+        vid = item.get("id", {}).get("videoId")
+        snippet = item.get("snippet", {})
+        if not vid or vid == video_id:
+            continue
+        results.append({
+            "video_id": vid,
+            "title": snippet.get("title", ""),
+            "channel": snippet.get("channelTitle", ""),
+            "thumbnail": (snippet.get("thumbnails", {}).get("default", {}) or {}).get("url", ""),
+        })
+
+    return jsonify({"results": results[:6]})
 
 
 # ---------------- Socket.IO events ----------------
