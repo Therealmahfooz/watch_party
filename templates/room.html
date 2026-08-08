@@ -62,6 +62,30 @@
     transition: padding 0.2s;
   }
 
+  .connection-banner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    background: #4a2e0a;
+    color: #f0b656;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 7px;
+    flex-shrink: 0;
+  }
+  .connection-banner .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #f0b656;
+    animation: pulseDot 1s infinite ease-in-out;
+  }
+  @keyframes pulseDot {
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 1; }
+  }
+
   body.cinema-active header {
     padding: 8px 16px;
     justify-content: flex-end;
@@ -292,6 +316,49 @@
     margin-top: 2px;
   }
 
+  .up-next-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+
+  .up-next-row {
+    display: flex;
+    gap: 10px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+
+  .up-next-card {
+    flex: 0 0 auto;
+    width: 160px;
+    cursor: pointer;
+  }
+
+  .up-next-card img {
+    width: 160px;
+    height: 90px;
+    object-fit: cover;
+    border-radius: 8px;
+    background: #000;
+    display: block;
+  }
+
+  .up-next-card .title {
+    font-size: 12px;
+    line-height: 1.3;
+    margin-top: 6px;
+    color: var(--text);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .up-next-card:hover img { outline: 2px solid var(--accent); }
+
   .url-bar input {
     flex: 1;
     padding: 10px 12px;
@@ -341,9 +408,10 @@
     width: 64px;
     height: 64px;
     border-radius: 50%;
-    background: rgba(0,0,0,0.55);
-    border: 2px solid rgba(255,255,255,0.6);
-    color: #fff;
+    background: rgba(0,0,0,0.25);
+    border: 1.5px solid rgba(255,255,255,0.35);
+    backdrop-filter: blur(2px);
+    color: rgba(255,255,255,0.85);
     font-size: 22px;
     cursor: pointer;
     z-index: 10;
@@ -352,7 +420,7 @@
     justify-content: center;
     transition: opacity 0.2s, background 0.2s;
   }
-  #play-overlay-btn:hover { background: rgba(0,0,0,0.75); }
+  #play-overlay-btn:hover { background: rgba(0,0,0,0.4); }
   #play-overlay-btn.hidden-fade { opacity: 0; pointer-events: none; }
 
   .seek-btn {
@@ -362,9 +430,10 @@
     width: 48px;
     height: 48px;
     border-radius: 50%;
-    background: rgba(0,0,0,0.5);
-    border: 2px solid rgba(255,255,255,0.5);
-    color: #fff;
+    background: rgba(0,0,0,0.2);
+    border: 1.5px solid rgba(255,255,255,0.3);
+    backdrop-filter: blur(2px);
+    color: rgba(255,255,255,0.8);
     font-size: 11px;
     font-weight: 700;
     cursor: pointer;
@@ -375,10 +444,36 @@
     gap: 2px;
     transition: opacity 0.2s, background 0.2s;
   }
-  .seek-btn:hover { background: rgba(0,0,0,0.75); }
+  .seek-btn:hover { background: rgba(0,0,0,0.35); }
   .seek-btn.hidden-fade { opacity: 0; pointer-events: none; }
   #seek-back-btn { left: calc(50% - 88px); }
   #seek-fwd-btn { left: calc(50% + 40px); }
+
+  .dtap-zone {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 40%;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #dtap-left { left: 0; }
+  #dtap-right { right: 0; }
+
+  .dtap-flash {
+    background: rgba(0,0,0,0.4);
+    color: rgba(255,255,255,0.9);
+    font-size: 13px;
+    font-weight: 700;
+    padding: 10px 16px;
+    border-radius: 30px;
+    opacity: 0;
+    transition: opacity 0.25s;
+    pointer-events: none;
+  }
+  .dtap-flash.show { opacity: 1; }
 
   .stage video {
     width: 100%;
@@ -629,6 +724,10 @@
   </div>
 </header>
 
+<div id="connection-banner" class="connection-banner" style="display:none;">
+  <span class="dot"></span> Reconnecting…
+</div>
+
 <div class="layout">
   <div class="main" id="main-panel">
     <div class="controls-panel" id="controls-panel">
@@ -647,6 +746,10 @@
         <input type="file" id="local-file-input" accept="video/*" style="display:none;">
       </div>
       <div class="hint">Tip: YouTube links work best (perfect auto-sync). For Google Drive, share the file as "Anyone with the link" — large files may not load. "Local File" plays a video already saved on your device — everyone needs the same file on their own phone for it to stay in sync. If playback ever falls out of sync, press "🔄 Sync" to bring everyone to your current position.</div>
+      <div id="up-next-panel" style="display:none;">
+        <div class="up-next-label">Up Next</div>
+        <div class="up-next-row" id="up-next-row"></div>
+      </div>
     </div>
 
     <div class="stage" id="stage">
@@ -656,6 +759,8 @@
       </div>
       <video id="player" style="display:none;" playsinline></video>
       <div id="yt-player" style="display:none; width:100%; height:100%;"></div>
+      <div class="dtap-zone" id="dtap-left"><div class="dtap-flash" id="dtap-flash-left">⏪ 10</div></div>
+      <div class="dtap-zone" id="dtap-right"><div class="dtap-flash" id="dtap-flash-right">10 ⏩</div></div>
       <button id="seek-back-btn" class="seek-btn" style="display:none;" title="Back 10s">⏪ 10</button>
       <button id="play-overlay-btn" style="display:none;" title="Play/Pause">▶</button>
       <button id="seek-fwd-btn" class="seek-btn" style="display:none;" title="Forward 10s">10 ⏩</button>
@@ -715,6 +820,21 @@
   const ROOM = "{{ code }}";
   const NAME = "{{ name }}";
   const socket = io();
+
+  // ---- Connection status banner ----
+  const connectionBanner = document.getElementById('connection-banner');
+  socket.on('disconnect', (reason) => {
+    // Deliberate disconnects (exiting, backgrounding the tab) shouldn't
+    // show an alarming banner — only show it for unexpected drops.
+    if (reason === 'io client disconnect') return;
+    connectionBanner.style.display = 'flex';
+  });
+  socket.on('connect', () => {
+    connectionBanner.style.display = 'none';
+  });
+  socket.io.on('reconnect_attempt', () => {
+    connectionBanner.style.display = 'flex';
+  });
 
   // ---- Screen wake lock (keep the screen on while a video is playing) ----
   let wakeLock = null;
@@ -1134,6 +1254,27 @@
   seekBackBtn.addEventListener('click', () => seekBy(-10));
   seekFwdBtn.addEventListener('click', () => seekBy(10));
 
+  // ---- Double-tap to seek (mobile gesture, like YouTube) ----
+  function setupDoubleTap(zoneEl, flashEl, delta) {
+    let lastTap = 0;
+    function trigger() {
+      seekBy(delta);
+      flashEl.classList.add('show');
+      setTimeout(() => flashEl.classList.remove('show'), 500);
+    }
+    zoneEl.addEventListener('click', () => {
+      const now = Date.now();
+      if (now - lastTap < 350) {
+        trigger();
+        lastTap = 0;
+      } else {
+        lastTap = now;
+      }
+    });
+  }
+  setupDoubleTap(document.getElementById('dtap-left'), document.getElementById('dtap-flash-left'), -10);
+  setupDoubleTap(document.getElementById('dtap-right'), document.getElementById('dtap-flash-right'), 10);
+
   function hideAllPlayers() {
     emptyStage.style.display = 'none';
     fallbackNote.style.display = 'none';
@@ -1142,8 +1283,48 @@
     overlayBtn.style.display = 'none';
     seekBackBtn.style.display = 'none';
     seekFwdBtn.style.display = 'none';
+    document.getElementById('up-next-panel').style.display = 'none';
     document.getElementById('stage').classList.remove('drive-fallback');
     if (ytPollTimer) { clearInterval(ytPollTimer); ytPollTimer = null; }
+  }
+
+  // ---- "Up Next" related videos (YouTube only) ----
+  let upNextAbort = null;
+  async function loadUpNext(videoId) {
+    const panel = document.getElementById('up-next-panel');
+    const row = document.getElementById('up-next-row');
+    try {
+      if (upNextAbort) upNextAbort.abort();
+      upNextAbort = new AbortController();
+      const res = await fetch('/api/youtube_related?video_id=' + encodeURIComponent(videoId), { signal: upNextAbort.signal });
+      const data = await res.json();
+      const results = data.results || [];
+      if (!results.length) { panel.style.display = 'none'; return; }
+
+      row.innerHTML = '';
+      results.forEach(r => {
+        const card = document.createElement('div');
+        card.className = 'up-next-card';
+
+        const img = document.createElement('img');
+        img.src = r.thumbnail || '';
+        card.appendChild(img);
+
+        const title = document.createElement('div');
+        title.className = 'title';
+        title.textContent = r.title;
+        card.appendChild(title);
+
+        card.addEventListener('click', () => {
+          socket.emit('set_video', { room: ROOM, url: 'https://www.youtube.com/watch?v=' + r.video_id });
+        });
+
+        row.appendChild(card);
+      });
+      panel.style.display = 'block';
+    } catch (err) {
+      panel.style.display = 'none';
+    }
   }
 
   function showDirectVideo(src) {
@@ -1182,6 +1363,7 @@
     seekBackBtn.classList.remove('hidden-fade');
     seekFwdBtn.classList.remove('hidden-fade');
     updateOverlayIcon(!!autoplay);
+    loadUpNext(videoId);
 
     if (!ytReady) {
       pendingYtVideo = { id: videoId, time: startTime || 0, playing: !!autoplay };
